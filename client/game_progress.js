@@ -7,7 +7,7 @@ const STORAGE_KEY = "geminisland_game_progress_v1";
 const DEFAULT_STATE = {
   bests: {},
   achievements: {},
-  settings: { audioMuted: false, audioVolume: 0.8, aiDifficulty: "normal", boardMode: "local" },
+  settings: { audioMuted: false, audioVolume: 0.8, aiDifficulty: "normal", boardMode: "local", carLevel: 1 },
   leaderboard: {},
   lastResults: {},
 };
@@ -204,4 +204,24 @@ export function addRemoteScore(gameId, entry) {
 export function resetGameProgress() {
   state = clone(DEFAULT_STATE);
   save();
+}
+
+
+const CAR_LEVEL_MIN = 0;
+const CAR_LEVEL_MAX = 2;
+
+export function getCarLevel() {
+  const raw = Number(state?.settings?.carLevel);
+  if (!Number.isFinite(raw)) return 1;
+  return Math.min(CAR_LEVEL_MAX, Math.max(CAR_LEVEL_MIN, Math.trunc(raw)));
+}
+
+export function setCarLevel(level) {
+  const raw = Number(level);
+  const next = Number.isFinite(raw)
+    ? Math.min(CAR_LEVEL_MAX, Math.max(CAR_LEVEL_MIN, Math.trunc(raw)))
+    : 1;
+  state = { ...state, settings: { ...state.settings, carLevel: next } };
+  save();
+  return next;
 }

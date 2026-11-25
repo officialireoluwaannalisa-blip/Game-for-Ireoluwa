@@ -107,6 +107,10 @@ const arcadeAutoDriveBtn = document.getElementById("arcade-autodrive-btn");
 const arcadeRunnerControls = document.getElementById("arcade-runner-controls");
 const arcadeBalloonControls = document.getElementById("arcade-balloon-controls");
 const arcadeBalloonMissionEl = document.getElementById("arcade-balloon-mission");
+const arcadeCarLevelsEl = document.getElementById("arcade-car-levels");
+const arcadeCarLevelBtns = arcadeCarLevelsEl
+  ? Array.from(arcadeCarLevelsEl.querySelectorAll("[data-car-level]"))
+  : [];
 
 const gamesLaunchBtn = document.getElementById("games-launch-btn");
 const gamesDialog = document.getElementById("games-dialog");
@@ -281,6 +285,14 @@ function syncArcadeHud(hudState) {
     arcadeBalloonControls.hidden = mode !== "balloon_pop" || Boolean(hudState.gameOver);
   }
 
+  if (mode === "car_drive" && arcadeCarLevelBtns.length) {
+    const activeLevel = Number(hudState.carLevel ?? 1);
+    for (const btn of arcadeCarLevelBtns) {
+      const isActive = Number(btn.getAttribute("data-car-level")) === activeLevel;
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    }
+  }
   if (mode === "car_drive" && arcadeAutoDriveBtn) {
     const autoOn = Boolean(hudState.autoDrive);
     arcadeAutoDriveBtn.classList.toggle("is-active", autoOn);
@@ -679,6 +691,15 @@ arcadeAutoDriveBtn?.addEventListener("click", () => {
   arcadeAutoDriveBtn.blur();
 });
 
+arcadeCarLevelBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const level = Number(btn.getAttribute("data-car-level"));
+    if (!Number.isFinite(level)) return;
+    engine?.arcadeControl?.("carLevel", level);
+    btn.blur();
+  });
+});
+
 arcadeCarControls?.querySelectorAll("[data-arcade-hold]").forEach((btn) => {
   const key = btn.getAttribute("data-arcade-hold");
   if (!key) return;
@@ -729,6 +750,7 @@ window.__geminIslandGameEvents = {
   },
   publish(payload) {
     gameEventListeners.forEach((listener) => listener(payload));
+    if (staticSnapshotMode) return Promise.resolve(null);
     return fetch("/api/game-events", {
       method: "POST",
       headers: {
@@ -932,6 +954,10 @@ function ordinalSuffix(n) {
 }
 
 async function refreshSpectateFeed() {
+  if (staticSnapshotMode) {
+    renderSpectateFeed([]);
+    return;
+  }
   try {
     const response = await fetch("/api/game-events", { headers: buildVisitorHeaders() });
     if (!response.ok) return;
@@ -963,6 +989,7 @@ function openGamesMenu() {
 }
 
 async function publishGameScore(gameId, score) {
+  if (staticSnapshotMode) return;
   const numeric = Number(score);
   if (!Number.isFinite(numeric) || numeric < 0) return;
   const key = `${gameId}:${Math.round(numeric)}`;
@@ -1600,6 +1627,7 @@ promptInput.addEventListener("keydown", (e) => {
 });
 
 async function refreshLiveFeeds() {
+  if (staticSnapshotMode) return;
   try {
     const res = await fetch("/api/feeds");
     if (!res.ok) return;
@@ -1613,6 +1641,7 @@ async function refreshLiveFeeds() {
 }
 
 async function refreshDailyEligibility() {
+  if (staticSnapshotMode) return;
   if (isOgCapture || uiState === "building" || uiState === "ready") return;
   try {
     const res = await fetch("/api/world", {
@@ -1719,9 +1748,12 @@ function handleWorldMessage(msg) {
   }
 }
 
-if (!isOgCapture) {
+function initMultiplayer() {
+  if (mpClient || isOgCapture || typeof window === "undefined") return;
+  // Multiplayer needs the live server; this is only called once the live /api/world
+  // has responded, so the static deployment never opens a WebSocket.
   mpClient = createMultiplayerClient({
-    multiplayerEnabled: !isOgCapture,
+    multiplayerEnabled: true,
     getLocalPose: () => engine?.getLocalMultiplayerPose?.(),
     getLocalProfile: () => engine?.getLocalAppearance?.(),
     getExtraHeaders: () => buildVisitorHeaders(),
@@ -1757,11 +1789,28 @@ if (!isOgCapture) {
       updateOnlinePill(count);
     },
   });
+  window.__geminIslandMp = mpClient;
 }
 
-window.__geminIslandMp = mpClient;
+let staticSnapshotMode = false;
+
+async function applyStaticSnapshot() {
+  staticSnapshotMode = true;
+  const res = await fetch("/world-snapshot.json", { cache: "force-cache" });
+  if (!res.ok) throw new Error(`world snapshot ${res.status}`);
+  const snapshot = await res.json();
+  myCreationId = null;
+  applyEffectiveWorld(snapshot);
+  if (!isOgCapture) {
+    if (uiState !== "building" && uiState !== "ready") {
+      uiState = "idle";
+    }
+    syncDockUI();
+  }
+}
 
 async function initWorld() {
+  let loadedLive = false;
   try {
     const res = await fetch("/api/world", {
       headers: buildVisitorHeaders(),
@@ -1771,6 +1820,8 @@ async function initWorld() {
       if (initialWorld?.visitorToken) storeVisitorToken(initialWorld.visitorToken);
       myCreationId = initialWorld.myCreationId || myCreationId || null;
       applyEffectiveWorld(initialWorld);
+      loadedLive = true;
+      initMultiplayer();
       if (!isOgCapture) {
         if (myCreationId) {
           uiState = "placed";
@@ -1784,7 +1835,14 @@ async function initWorld() {
       }
     }
   } catch (err) {
-    console.error("Failed to fetch initial world:", err);
+    console.warn("Live world unavailable; loading built-in island snapshot.", err);
+  }
+  if (!loadedLive && !rawWorldData) {
+    try {
+      await applyStaticSnapshot();
+    } catch (snapshotErr) {
+      console.error("Failed to load island snapshot:", snapshotErr);
+    }
   }
 
   refreshLiveFeeds();

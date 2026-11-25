@@ -9,9 +9,9 @@ export const ARCADE_GAMES = [
     icon: "🏎️",
     color: "#dc2626",
     category: "Race",
-    objective: "Finish 3 laps ahead of three AI cars and collect track stars.",
-    winCondition: "Win by completing all 3 laps in 1st place; stars are the score bonus.",
-    controls: "Arrow keys / WASD or on-screen pads to steer and accelerate. Honk and Auto-Drive are optional.",
+    objective: "Pick Rookie Tour, Island Grand Prix or Storm Chase — finish every lap ahead of the AI rivals and collect track stars.",
+    winCondition: "Win by completing all laps in 1st place; stars are the score bonus. Rookie runs 2 laps vs 2 rivals, Grand Prix 3 laps vs 3, Storm Chase 4 laps vs 3 fierce rivals.",
+    controls: "Arrow keys / WASD or on-screen pads to steer and accelerate. Switch difficulty with the 🌱🏁⛈️ buttons during the race. Honk and Auto-Drive are optional.",
     bestMetric: "stars",
   },
   {

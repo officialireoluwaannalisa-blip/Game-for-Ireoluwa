@@ -25,7 +25,7 @@ export const PLAYABLE_ARCADE_GAMES = [
     icon: "🏎️",
     color: "#dc2626",
     categories: ["games", "fun"],
-    tip: "Use Arrow Keys to drive & race 3 AI cars!",
+    tip: "Pick Rookie, Grand Prix or Storm Chase — use Arrow Keys to drive!",
   },
   {
     id: "subway_runner",

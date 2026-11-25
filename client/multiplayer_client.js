@@ -744,7 +744,9 @@ export function createMultiplayerClient(options = {}) {
     window.addEventListener("pageshow", handlePageShow);
   }
 
-  connect();
+  if (multiplayerEnabled) {
+    connect();
+  }
 
   function dispose() {
     if (disposed) return;

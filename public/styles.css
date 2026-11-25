@@ -2247,6 +2247,32 @@ body[data-arcade-active="1"] .cam-controls {
   border-color: #115e59;
 }
 
+.arcade-level-cluster {
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  padding-left: 12px;
+  gap: 8px;
+}
+
+.arcade-level-btn {
+  min-width: 0;
+  font-size: 0.82rem;
+  padding: 8px 12px;
+  background: #1f2937;
+  border-color: #111827;
+  color: #f8fafc;
+}
+
+.arcade-level-btn:hover {
+  background: #374151;
+}
+
+.arcade-level-btn.is-active {
+  background: #f59e0b;
+  border-color: #d97706;
+  color: #1f2937;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.45);
+}
+
 .arcade-balloon-strip {
   pointer-events: auto;
   background: rgba(255, 255, 255, 0.95);

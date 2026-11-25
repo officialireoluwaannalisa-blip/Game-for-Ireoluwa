@@ -1,6 +1,7 @@
 // GeminIsland — Playable 3D In-World Arcade Games for Kids Mode:
-// 1. Island Grand Prix ("car_drive") — Dedicated race island & closed-loop speedway track, 3 AI opponent cars,
-//    turbo boost pads, 3-2-1-GO countdown, 3-lap standings, and star rewards.
+// 1. Island Grand Prix ("car_drive") — Dedicated race island & closed-loop speedway track with three difficulty
+//    levels (Rookie Tour, Island Grand Prix, Storm Chase), 2–3 AI opponent cars, turbo boost pads,
+//    3-2-1-GO countdown, lap standings, and star rewards.
 // 2. Island Surfer ("subway_runner") — Subway Surfer-style 3-lane tropical island runner with scrolling palm beaches,
 //    surf huts, visible hero avatar facing forward, hover-surfboard power-up, trains, hurdles & surf arches.
 // 3. Sky Balloon Pop ("balloon_pop") — 3D raycast balloon-popping color & counting game over Central Plaza.
@@ -17,7 +18,9 @@ import {
 import {
   claimMilestone,
   getBest,
+  getCarLevel as getCarLevelPref,
   recordBest,
+  setCarLevel as setCarLevelPref,
 } from "../game_progress.js";
 import {
   bufferInput,
@@ -579,13 +582,13 @@ function buildIslandRunnerSegmentMesh(variant = 0) {
     v.box(7, 1, z, 7, 1, z + 2, "#f8fafc");
   }
 
-  //Station platforms on both sides, yellow safety edges and tiled walls.
-  v.box(-29, -1, -12, -18, 2, 12, "#9aa7b8");
-  v.box(18, -1, -12, 29, 2, 12, "#9aa7b8");
+  // Station platforms on both sides, yellow safety edges and tiled walls.
+  v.box(-29, -1, -12, -18, 2, 12, "#aeb9cc");
+  v.box(18, -1, -12, 29, 2, 12, "#aeb9cc");
   v.box(-19, 2, -12, -18, 2, 12, "#facc15");
   v.box(18, 2, -12, 19, 2, 12, "#facc15");
-  v.box(-31, 2, -12, -30, 11, 12, "#334155");
-  v.box(30, 2, -12, 31, 11, 12, "#334155");
+  v.box(-31, 2, -12, -30, 11, 12, "#4b5a76");
+  v.box(30, 2, -12, 31, 11, 12, "#4b5a76");
 
   // Pillars, station name boards and glowing ad panels.
   const accent = ["#ef4444", "#2563eb", "#10b981", "#f59e0b"][variant % 4];
@@ -598,23 +601,12 @@ function buildIslandRunnerSegmentMesh(variant = 0) {
   v.box(-31, 8, -6, -30, 9, 6, "#f8fafc");
   v.box(30, 8, -6, 31, 9, 6, "#fef08a");
 
-  // Overhead gantry with strip lights, the classic subway-surfer silhouette.
-  if (variant % 2 === 0) {
-    v.box(-31, 12, -3, 31, 13, -2, "#64748b");
-    v.box(-12, 11, -3, 12, 11, -2, "#fef08a", 1.2);
-    v.box(-31, 10, -3, -28, 12, -2, "#64748b");
-    v.box(28, 10, -3, 31, 12, -2, "#64748b");
-  } else {
-    v.box(-31, 12, 6, 31, 13, 7, "#64748b");
-    v.box(-10, 11, 6, 10, 11, 7, "#e0f2fe", 1.2);
-  }
-
   // Distant city skyline behind the platforms.
   const heights = [12, 17, 10, 20, 14, 18];
   for (let i = 0; i < 6; i++) {
     const h = heights[(i + variant) % heights.length];
-    v.box(-46 + i * 3, 2, -10, -44 + i * 3, h, 10, i % 2 ? "#475569" : "#64748b");
-    v.box(29 + i * 3, 2, -10, 31 + i * 3, h, 10, i % 2 ? "#64748b" : "#475569");
+    v.box(-46 + i * 3, 2, -10, -44 + i * 3, h, 10, i % 2 ? "#5c6c88" : "#728199");
+    v.box(29 + i * 3, 2, -10, 31 + i * 3, h, 10, i % 2 ? "#728199" : "#5c6c88");
     for (let wy = 5; wy < h - 1; wy += 4) {
       v.put(-45 + i * 3, wy, 11, "#fbbf24", 0.8);
       v.put(30 + i * 3, wy, 11, "#fbbf24", 0.8);
@@ -679,7 +671,13 @@ export function createKidsArcadeSystem({
   const camLook = new THREE.Vector3();
 
   // ── 1. Island Grand Prix (Dedicated Race Track Island + AI Opponents) ─────
-  const TOTAL_LAPS = 3;
+  const CAR_LEVELS = [
+    { id: 0, name: "Rookie Tour", icon: "🌱", laps: 2, aiCount: 2, aiRate: 0.82, blurb: "2 laps · 2 friendly rivals" },
+    { id: 1, name: "Island Grand Prix", icon: "🏁", laps: 3, aiCount: 3, aiRate: 1.0, blurb: "3 laps · balanced rivals" },
+    { id: 2, name: "Storm Chase", icon: "⛈️", laps: 4, aiCount: 3, aiRate: 1.17, blurb: "4 laps · fierce rivals" },
+  ];
+  let carLevelIndex = getCarLevelPref();
+  const carLevel = () => CAR_LEVELS[carLevelIndex] || CAR_LEVELS[1];
   const raceWorld = buildRaceIslandGroup();
   raceWorld.group.visible = false;
   arcadeGroup.add(raceWorld.group);
@@ -905,25 +903,30 @@ export function createKidsArcadeSystem({
         countdownText = "GO!";
       }
 
+      const lvl = carLevel();
+      const fieldSize = lvl.aiCount + 1;
       const rank = carState.raceFinished ? carState.finishRank : carState.rank;
       const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : "🏁";
       onHudChange?.({
         mode: "car_drive",
-        title: "Island Grand Prix",
+        title: `${lvl.icon} ${lvl.name}`,
         scoreValue: carState.score,
-        scoreLabel: `${medal} ${ordinal(rank)}/4 · Lap ${Math.min(TOTAL_LAPS, carState.lap)}/${TOTAL_LAPS} · 🏎️ ${Math.round(carState.speed * 3.6)} km/h · ★ ${carState.score} · Best ${getBest("car_drive", "stars")}`,
+        scoreLabel: `${medal} ${ordinal(rank)}/${fieldSize} · Lap ${Math.min(lvl.laps, carState.lap)}/${lvl.laps} · 🏎️ ${Math.round(carState.speed * 3.6)} km/h · ★ ${carState.score} · Best ${getBest("car_drive", "stars")}`,
         subLabel: carState.raceFinished
           ? `Finished ${ordinal(rank)} place with ${carState.score} stars!`
           : carState.boostTimer > 0
             ? "⚡ TURBO BOOST!"
             : carState.autoDrive
               ? "Auto-Drive ON · Press ▲▼◀▶ to take over!"
-              : "Use Arrow Keys (▲ ▼ ◀ ▶) to drive & steer!",
+              : `${lvl.blurb} · Arrow Keys (▲ ▼ ◀ ▶) to drive!`,
         countdownText,
         raceFinished: carState.raceFinished,
         finishBadge: `${medal} ${ordinal(rank)} Place!`,
-        finishText: `Awesome driving! You finished ${ordinal(rank)} out of 4 cars and collected ${carState.score} track stars!`,
+        finishText: `Awesome driving on ${lvl.name}! You finished ${ordinal(rank)} out of ${fieldSize} cars and collected ${carState.score} track stars!`,
         autoDrive: carState.autoDrive,
+        carLevel: carLevelIndex,
+        carLevelName: lvl.name,
+        carLevelBlurb: lvl.blurb,
       });
     } else if (activeMode === "subway_runner") {
       const heartsText = "❤️".repeat(Math.max(0, runnerState.hearts)) + "🤍".repeat(Math.max(0, 3 - runnerState.hearts));
@@ -964,6 +967,7 @@ export function createKidsArcadeSystem({
   function startCarDrive() {
     clearRunnerEntities();
     clearBalloons();
+    const lvl = carLevel();
     activeMode = "car_drive";
     arcadeGroup.visible = true;
     raceWorld.group.visible = true;
@@ -972,7 +976,7 @@ export function createKidsArcadeSystem({
     runnerGroup.visible = false;
     balloonGroup.visible = false;
 
-    // Place player & 3 AI cars on staggered start grid just behind theta = 0!
+    // Place player & AI cars on the staggered start grid just behind theta = 0!
     const gridSpots = [
       { th: wrapAngle02Pi(-0.045), lat: -2.5 }, // Player starts P4 on inside rear for fun overtakes!
       { th: wrapAngle02Pi(-0.025), lat: 2.5 },  // AI 0
@@ -1000,24 +1004,30 @@ export function createKidsArcadeSystem({
     carState.lastTheta = gridSpots[0].th;
     carState.unwrappedTheta = -0.045;
     carState.totalProgress = -0.045;
-    carState.rank = 4;
+    carState.rank = lvl.aiCount + 1;
     carState.finishRank = 0;
     carState.raceFinished = false;
     carState.score = 0;
     carState.starsEarned = 0;
 
     aiCars.forEach((ai, idx) => {
+      const isActive = idx < lvl.aiCount;
+      ai.active = isActive;
       const gs = gridSpots[idx + 1];
       const af = getTrackFrame(gs.th);
       ai.theta = gs.th;
       ai.lap = 1;
       // Keep AI progress in the same unwrapped coordinate space as the player.
-      // Previously two cars were placed a whole lap behind, so the announced P4
-      // start immediately became P2 on the first standings update.
+      // Previously two cars were placed a whole lap behind, so the announced last-
+      // place start immediately became 2nd on the first standings update.
       ai.totalProgress = carState.totalProgress + wrapAngleDiff(gs.th, gridSpots[0].th);
       ai.laneOffset = ai.spec.laneOff;
-      ai.speedRate = ai.spec.baseRate;
+      ai.speedRate = ai.spec.baseRate * lvl.aiRate;
       ai.wheelSpin = 0;
+      if (!isActive) {
+        ai.model.root.visible = false;
+        return;
+      }
       ai.x = af.x + af.nx * gs.lat;
       ai.z = af.z + af.nz * gs.lat;
       ai.yaw = af.yaw;
@@ -1253,6 +1263,19 @@ export function createKidsArcadeSystem({
     onExit?.();
   }
 
+  function setCarLevel(nextIndex) {
+    const raw = Number(nextIndex);
+    const clamped = CAR_LEVELS
+      ? Math.min(CAR_LEVELS.length - 1, Math.max(0, Math.trunc(Number.isFinite(raw) ? raw : 1)))
+      : 1;
+    carLevelIndex = clamped;
+    setCarLevelPref(clamped);
+    if (activeMode === "car_drive") {
+      startCarDrive();
+    }
+    return clamped;
+  }
+
   // ─── Input Actions for Touch Buttons / Swipe / Keys ────────────────────────
   function setControlInput(key, active) {
     if (key in inputs) {
@@ -1380,7 +1403,9 @@ export function createKidsArcadeSystem({
         if (carState.boostTimer === 0) hudDirty = true;
       }
 
-      // Forward is +Z at yaw 0; positive yaw steers right, so Right = +1.
+      // Forward is +Z at yaw 0. The chase camera sits behind the car facing the same
+      // way, and for a viewer facing +Z the screen-right direction is −X — so a right
+      // turn must DECREASE yaw. steerIn is +1 for Right, hence the minus sign below.
       const steerIn = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
       if (!racingLive && !carState.raceFinished) {
         // Allow visible front-wheel steering during countdown so arrow keys feel immediately alive
@@ -1407,7 +1432,7 @@ export function createKidsArcadeSystem({
         const turnDir = carState.speed >= -0.2 ? 1 : -1;
         const speedFactor =
           Math.abs(carState.speed) > 0.2 ? Math.min(1, Math.abs(carState.speed) / 3.4) : 0.45;
-        carState.yaw += steerIn * 2.4 * speedFactor * turnDir * dt;
+        carState.yaw -= steerIn * 2.4 * speedFactor * turnDir * dt;
 
         // Gentle auto-assist steering only when Auto-Drive is toggled ON and player isn't pressing Left/Right
         if (carState.autoDrive && steerIn === 0 && Math.abs(carState.speed) > 1) {
@@ -1463,7 +1488,7 @@ export function createKidsArcadeSystem({
         if (nextLap !== carState.lap) {
           carState.lap = nextLap;
           hudDirty = true;
-          if (carState.lap > TOTAL_LAPS) {
+          if (carState.lap > carLevel().laps) {
             carState.raceFinished = true;
             carState.finishRank = carState.rank;
             carState.starsEarned++;
@@ -1495,10 +1520,11 @@ export function createKidsArcadeSystem({
         carState.z += Math.cos(carState.yaw) * carState.speed * dt;
       }
 
-      // Step 3 AI Opponent Race Cars
+      // Step AI Opponent Race Cars
       if (racingLive) {
         for (let i = 0; i < aiCars.length; i++) {
           const ai = aiCars[i];
+          if (ai.active === false) continue;
           // Gentle kid-friendly rubber banding around player progress
           const progGap = carState.totalProgress - ai.totalProgress;
           const rubber = THREE.MathUtils.clamp(progGap * 0.04, -0.055, 0.065);
@@ -1538,7 +1564,7 @@ export function createKidsArcadeSystem({
       // Compute Live Standings (1st .. 4th)
       if (!carState.raceFinished) {
         const nextRank = raceRank(
-          [carState.totalProgress, ...aiCars.map((ai) => ai.totalProgress)],
+          [carState.totalProgress, ...aiCars.filter((ai) => ai.active !== false).map((ai) => ai.totalProgress)],
           0,
         );
         if (nextRank !== carState.rank) {
@@ -1554,8 +1580,8 @@ export function createKidsArcadeSystem({
       carGroup.rotation.set(0, carState.yaw, -carState.steer * 0.12);
 
       carState.wheelSpin += carState.speed * dt * 2.4;
-      carModel.wheels.fl.rotation.set(carState.wheelSpin, carState.steer * 0.7, 0);
-      carModel.wheels.fr.rotation.set(carState.wheelSpin, carState.steer * 0.7, 0);
+      carModel.wheels.fl.rotation.set(carState.wheelSpin, -carState.steer * 0.7, 0);
+      carModel.wheels.fr.rotation.set(carState.wheelSpin, -carState.steer * 0.7, 0);
       carModel.wheels.rl.rotation.set(carState.wheelSpin, 0, 0);
       carModel.wheels.rr.rotation.set(carState.wheelSpin, 0, 0);
 
@@ -2001,5 +2027,6 @@ export function createKidsArcadeSystem({
     triggerHonk,
     toggleAutoDrive,
     handlePointerTap,
+    setCarLevel,
   };
 }

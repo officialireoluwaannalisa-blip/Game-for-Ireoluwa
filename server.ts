@@ -144,7 +144,7 @@ function sanitizeGamePositionEvent(raw: Record<string, unknown>, name: string) {
     x: Math.max(-1000, Math.min(1000, x)),
     z: Math.max(-1000, Math.min(1000, z)),
     yaw: Math.max(-Math.PI * 2, Math.min(Math.PI * 2, Number(raw.yaw) || 0)),
-    lap: Math.max(1, Math.min(3, Math.trunc(Number(raw.lap) || 1))),
+    lap: Math.max(1, Math.min(8, Math.trunc(Number(raw.lap) || 1))),
     rank: Math.max(1, Math.min(4, Math.trunc(Number(raw.rank) || 4))),
     clientId: sanitizePlainText(raw.clientId, 48, true),
     name: name || "Explorer",

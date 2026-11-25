@@ -5339,6 +5339,9 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       case "autoDrive":
         kidsArcade.toggleAutoDrive();
         return true;
+      case "carLevel":
+        kidsArcade.setCarLevel(Number(value));
+        return true;
       case "restart":
         return startArcadeGame(kidsArcade.getActiveMode() || "subway_runner");
       default:
