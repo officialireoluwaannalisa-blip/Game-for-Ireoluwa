@@ -3218,13 +3218,10 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       /Mali-G[357]|Adreno \(TM\) [2-6]|PowerVR|Intel\(R\) (HD|UHD) Graphics [456]/i.test(gpuName));
   const maxAniso = renderer.capabilities.getMaxAnisotropy?.() || 4;
 
-  // Software WebGL (remote previews, headless browsers) cannot afford a shadow
-  // pass or full-resolution pixels. Start low instead of waiting for the frame
-  // governor, which would otherwise take minutes to react at sub-1 FPS.
-  let activeMaxDpr = isSoftwareGpu ? 0.6 : isLowTierGpu ? 1.25 : w0 > 2560 && !ogMode ? 1.65 : 2;
+  let activeMaxDpr = isSoftwareGpu ? 1 : isLowTierGpu ? 1.5 : w0 > 2560 && !ogMode ? 1.65 : 2;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, activeMaxDpr));
   renderer.setSize(w0, h0, false);
-  renderer.shadowMap.enabled = !isSoftwareGpu;
+  renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
@@ -3328,7 +3325,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
     uZones: { value: Array.from({ length: MAX_SHADER_ZONES }, () => new THREE.Vector4(0, 0, 0, 0)) },
     uZoneCount: { value: 0 },
   };
-  const groundGeo = buildIslandTerrainGeometry(isSoftwareGpu);
+  const groundGeo = buildIslandTerrainGeometry();
   const groundMesh = new THREE.Mesh(groundGeo, buildEndlessGrassMaterial(grassUniforms));
   groundMesh.receiveShadow = true;
   groundMesh.matrixAutoUpdate = false;
@@ -4218,11 +4215,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
         return {
           id: rp.id,
           rank: rp.id === "path-main-loop" ? 0 : rp.closed ? 1 : 2 + rIdx,
-          pts: rCurve.getSpacedPoints(
-            isSoftwareGpu
-              ? Math.min(48, Math.max(12, Math.round(rLen * 0.4)))
-              : Math.min(180, Math.max(28, Math.round(rLen * 1.5))),
-          ),
+          pts: rCurve.getSpacedPoints(Math.min(180, Math.max(28, Math.round(rLen * 1.5)))),
         };
       });
 
@@ -4284,9 +4277,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       }
       const curve = new THREE.CatmullRomCurve3(vecs, Boolean(p.closed), "centripetal", 0.5);
       const len = Math.max(2.5, curve.getLength());
-      const samples = isSoftwareGpu
-        ? Math.min(48, Math.max(12, Math.round(len * 0.4)))
-        : Math.min(200, Math.max(28, Math.round(len * 1.45)));
+      const samples = Math.min(200, Math.max(28, Math.round(len * 1.45)));
 
       if (p.kind === "road") {
         const isPrimaryRoad = p.id === "path-main-loop" || Boolean(p.closed);
@@ -7064,19 +7055,8 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
         } else if (activeMaxDpr > 1.25 && avgMs > 29) {
           activeMaxDpr = 1.25;
           handleResize();
-        } else if (avgMs > 90 && renderer.shadowMap.enabled) {
-          renderer.shadowMap.enabled = false;
-          scene.traverse((obj) => {
-            if (obj.isMesh && obj.material) {
-              const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-              for (const m of materials) m.needsUpdate = true;
-            }
-          });
-        } else if (activeMaxDpr > 0.75 && avgMs > 90) {
+        } else if (activeMaxDpr > 0.75 && avgMs > 160) {
           activeMaxDpr = 0.75;
-          handleResize();
-        } else if (activeMaxDpr > 0.5 && avgMs > 250) {
-          activeMaxDpr = 0.5;
           handleResize();
         }
       }
@@ -7096,27 +7076,6 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
     setGameAudioListener(preFocusX, preFocusZ);
     const preActiveAz = fp.active ? fp.yaw : cam.az;
     const preViewerPos = fp.active && !preInside ? fp : null;
-
-    // Preview/software GPUs cannot draw the whole 174-creation island every frame.
-    // Cull distant creation groups only; we restore exactly the ones we hid.
-    if (isSoftwareGpu && !ogMode) {
-      const cullR = kidsArcade.isActive() ? 55 : 95;
-      const cullR2 = cullR * cullR;
-      for (const ent of cachedAllEntities) {
-        if (!ent.group) continue;
-        if (!ent.softwareCulled && !ent.group.visible) continue;
-        const dx = ent.x - preFocusX;
-        const dz = ent.z - preFocusZ;
-        const tooFar = dx * dx + dz * dz > cullR2;
-        if (tooFar && ent.group.visible) {
-          ent.group.visible = false;
-          ent.softwareCulled = true;
-        } else if (!tooFar && ent.softwareCulled) {
-          ent.group.visible = true;
-          ent.softwareCulled = false;
-        }
-      }
-    }
 
     rebuildSceneListsIfNeeded();
     simCtx.vehicles = cachedVehicles;
@@ -7235,6 +7194,12 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
 
     // 3. Update active camera (Arcade / Walk / Ride / Interior / Seated / Aerial) & local embodied character
     if (kidsArcade.isActive()) {
+      // The intro fly-through widens the near plane for aerial shots. Arcade
+      // cameras sit only a few metres from their player, so reset the clip range.
+      fpCamera.near = 0.14;
+      fpCamera.far = 820;
+      fpCamera.fov = aspect0 < 0.8 ? 72 : 62;
+      fpCamera.updateProjectionMatrix();
       // Arcade timers must follow wall time even when a software preview renders
       // at only a few frames per second; the world itself keeps its stable dt.
       const arcadeDt = Math.min(0.25, Math.max(0.001, rawDeltaMs / 1000));

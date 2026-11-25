@@ -561,56 +561,64 @@ function buildRunnerArchMesh() {
 function buildIslandRunnerSegmentMesh(variant = 0) {
   const group = new THREE.Group();
   const s = 0.23;
-
-  // 1. Central 3-lane Subway Track + Sandy Beach + Lush Island Shores
   const v = new Vox(743 + variant);
-  // Track gravel bed (x: -16..16)
-  v.box(-16, -2, -12, 16, 0, 12, "#64748b");
-  // Wooden railway ties across 3 lanes + gleaming rails
-  for (let z = -11; z <= 11; z += 4) {
-    v.box(-14, 0, z, -7, 0, z, "#92623a");
-    v.box(-4, 0, z, 4, 0, z, "#92623a");
-    v.box(7, 0, z, 14, 0, z, "#92623a");
+
+  // Three-lane subway rail bed: ballast, timber ties and raised steel rails.
+  v.box(-17, -2, -12, 17, 0, 12, "#475569");
+  for (let z = -11; z <= 11; z += 3) {
+    v.box(-15, 0, z, -8, 0, z, "#7c5230");
+    v.box(-5, 0, z, 5, 0, z, "#7c5230");
+    v.box(8, 0, z, 15, 0, z, "#7c5230");
   }
-  for (const rx of [-14, -8, -4, 4, 8, 14]) {
-    v.box(rx, 0, -12, rx, 0, 12, "#cbd5e1");
+  for (const rx of [-15, -9, -5, 5, 9, 15]) {
+    v.box(rx, 1, -12, rx, 1, 12, "#cbd5e1");
   }
-  // Lane divider dashes
-  for (let z = -10; z <= 10; z += 5) {
-    v.box(-6, 0, z, -5, 0, z + 2, "#f8fafc");
-    v.box(5, 0, z, 6, 0, z + 2, "#f8fafc");
+  // Lane guides / platform tactile strip colours.
+  for (let z = -10; z <= 10; z += 4) {
+    v.box(-7, 1, z, -7, 1, z + 2, "#f8fafc");
+    v.box(7, 1, z, 7, 1, z + 2, "#f8fafc");
   }
 
-  // Lush Grass Curbs & Tropical Island Cliffs/Beaches on both Left and Right!
-  v.box(-32, -3, -12, -17, 1, 12, "#58ad52");
-  v.box(17, -3, -12, 32, 1, 12, "#58ad52");
-  // Golden sandy beaches sloping out toward the turquoise sea
-  v.box(-42, -5, -12, -32, 0, 12, "#ebd399");
-  v.box(32, -5, -12, 42, 0, 12, "#ebd399");
-  // Raised grassy cliff terrace on outer edge
-  v.box(-30, 1, -12, -23, 3, 12, "#78c86c");
-  v.box(23, 1, -12, 30, 3, 12, "#78c86c");
+  //Station platforms on both sides, yellow safety edges and tiled walls.
+  v.box(-29, -1, -12, -18, 2, 12, "#9aa7b8");
+  v.box(18, -1, -12, 29, 2, 12, "#9aa7b8");
+  v.box(-19, 2, -12, -18, 2, 12, "#facc15");
+  v.box(18, 2, -12, 19, 2, 12, "#facc15");
+  v.box(-31, 2, -12, -30, 11, 12, "#334155");
+  v.box(30, 2, -12, 31, 11, 12, "#334155");
 
+  // Pillars, station name boards and glowing ad panels.
+  const accent = ["#ef4444", "#2563eb", "#10b981", "#f59e0b"][variant % 4];
+  for (const z of [-9, -1, 7]) {
+    v.box(-29, 2, z, -28, 11, z, "#e2e8f0");
+    v.box(28, 2, z, 29, 11, z, "#e2e8f0");
+  }
+  v.box(-31, 7, -8, -30, 10, 8, accent);
+  v.box(30, 7, -8, 31, 10, 8, "#38bdf8");
+  v.box(-31, 8, -6, -30, 9, 6, "#f8fafc");
+  v.box(30, 8, -6, 31, 9, 6, "#fef08a");
+
+  // Overhead gantry with strip lights, the classic subway-surfer silhouette.
   if (variant % 2 === 0) {
-    // Swaying voxel palm tree on left island + colorful beach umbrella on right
-    v.box(-26, 3, -2, -25, 11, -1, "#8f5e36");
-    v.box(-29, 11, -5, -22, 12, 2, "#4aa853");
-    v.box(-27, 12, -3, -24, 13, 0, "#78c86c");
-
-    // Beach umbrella on right sand
-    v.box(36, 0, 0, 36, 6, 0, "#f8fafc");
-    v.box(33, 6, -3, 39, 7, 3, variant === 0 ? "#ef4444" : "#f59e0b");
-    v.box(34, 7, -2, 38, 8, 2, "#ffffff");
+    v.box(-31, 12, -3, 31, 13, -2, "#64748b");
+    v.box(-12, 11, -3, 12, 11, -2, "#fef08a", 1.2);
+    v.box(-31, 10, -3, -28, 12, -2, "#64748b");
+    v.box(28, 10, -3, 31, 12, -2, "#64748b");
   } else {
-    // Colorful Surf Shack on right island + palm tree on left beach
-    v.box(24, 3, -5, 30, 9, 4, variant === 1 ? "#38bdf8" : "#ec4899");
-    v.box(23, 9, -6, 31, 11, 5, "#f5b82e");
-    v.box(23, 4, -2, 24, 8, 1, "#faf3e3"); // surf window
+    v.box(-31, 12, 6, 31, 13, 7, "#64748b");
+    v.box(-10, 11, 6, 10, 11, 7, "#e0f2fe", 1.2);
+  }
 
-    // Left beach palm
-    v.box(-36, 0, 2, -35, 9, 3, "#a87444");
-    v.box(-39, 9, -1, -32, 10, 6, "#58ad52");
-    v.box(-37, 10, 1, -34, 11, 4, "#78c86c");
+  // Distant city skyline behind the platforms.
+  const heights = [12, 17, 10, 20, 14, 18];
+  for (let i = 0; i < 6; i++) {
+    const h = heights[(i + variant) % heights.length];
+    v.box(-46 + i * 3, 2, -10, -44 + i * 3, h, 10, i % 2 ? "#475569" : "#64748b");
+    v.box(29 + i * 3, 2, -10, 31 + i * 3, h, 10, i % 2 ? "#64748b" : "#475569");
+    for (let wy = 5; wy < h - 1; wy += 4) {
+      v.put(-45 + i * 3, wy, 11, "#fbbf24", 0.8);
+      v.put(30 + i * 3, wy, 11, "#fbbf24", 0.8);
+    }
   }
 
   group.add(buildVoxelMesh(v, { scale: s, receiveShadow: true, castShadow: false }));
@@ -669,7 +677,6 @@ export function createKidsArcadeSystem({
 
   const camPos = new THREE.Vector3();
   const camLook = new THREE.Vector3();
-  const _lookDummy = new THREE.Object3D();
 
   // ── 1. Island Grand Prix (Dedicated Race Track Island + AI Opponents) ─────
   const TOTAL_LAPS = 3;
@@ -904,7 +911,7 @@ export function createKidsArcadeSystem({
         mode: "car_drive",
         title: "Island Grand Prix",
         scoreValue: carState.score,
-        scoreLabel: `${medal} ${ordinal(rank)}/4 · Lap ${Math.min(TOTAL_LAPS, carState.lap)}/${TOTAL_LAPS} · ★ ${carState.score} · Best ${getBest("car_drive", "stars")}`,
+        scoreLabel: `${medal} ${ordinal(rank)}/4 · Lap ${Math.min(TOTAL_LAPS, carState.lap)}/${TOTAL_LAPS} · 🏎️ ${Math.round(carState.speed * 3.6)} km/h · ★ ${carState.score} · Best ${getBest("car_drive", "stars")}`,
         subLabel: carState.raceFinished
           ? `Finished ${ordinal(rank)} place with ${carState.score} stars!`
           : carState.boostTimer > 0
@@ -1030,9 +1037,8 @@ export function createKidsArcadeSystem({
     camPos.set(carState.x - sinY0 * 7.2, RACE_ORIGIN_Y + 3.45, carState.z - cosY0 * 7.2);
     camLook.set(carState.x + sinY0 * 6.5, RACE_ORIGIN_Y + 1.55, carState.z + cosY0 * 6.5);
     fpCamera.position.copy(camPos);
-    _lookDummy.position.copy(camPos);
-    _lookDummy.lookAt(camLook);
-    fpCamera.rotation.setFromQuaternion(_lookDummy.quaternion, "YXZ");
+    fpCamera.position.copy(camPos);
+    fpCamera.lookAt(camLook);
     fpCamera.updateMatrixWorld();
     syncComposerCamera(fpCamera);
 
@@ -1374,7 +1380,8 @@ export function createKidsArcadeSystem({
         if (carState.boostTimer === 0) hudDirty = true;
       }
 
-      const steerIn = (inputs.left ? 1 : 0) - (inputs.right ? 1 : 0);
+      // Forward is +Z at yaw 0; positive yaw steers right, so Right = +1.
+      const steerIn = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
       if (!racingLive && !carState.raceFinished) {
         // Allow visible front-wheel steering during countdown so arrow keys feel immediately alive
         carState.steer = THREE.MathUtils.damp(carState.steer, steerIn * 0.5, 13, dt);
@@ -1613,9 +1620,8 @@ export function createKidsArcadeSystem({
       camLook.set(carState.x + sinY * 6.5, RACE_ORIGIN_Y + 1.55, carState.z + cosY * 6.5);
 
       fpCamera.position.copy(camPos);
-      _lookDummy.position.copy(camPos);
-      _lookDummy.lookAt(camLook);
-      fpCamera.rotation.setFromQuaternion(_lookDummy.quaternion, "YXZ");
+      fpCamera.position.copy(camPos);
+      fpCamera.lookAt(camLook);
       fpCamera.updateMatrixWorld();
       syncComposerCamera(fpCamera);
 
@@ -1880,9 +1886,8 @@ export function createKidsArcadeSystem({
       camLook.set(camPos.x * 0.88 + RUNNER_ORIGIN_X * 0.12, RUNNER_ORIGIN_Y + 1.45, -14);
 
       fpCamera.position.copy(camPos);
-      _lookDummy.position.copy(camPos);
-      _lookDummy.lookAt(camLook);
-      fpCamera.rotation.setFromQuaternion(_lookDummy.quaternion, "YXZ");
+      fpCamera.position.copy(camPos);
+      fpCamera.lookAt(camLook);
       fpCamera.updateMatrixWorld();
       syncComposerCamera(fpCamera);
 
@@ -1935,9 +1940,8 @@ export function createKidsArcadeSystem({
       camPos.set(Math.sin(t * 0.14) * 2.5, 6.4, 21.5);
       camLook.set(0, 4.6, -2);
       fpCamera.position.copy(camPos);
-      _lookDummy.position.copy(camPos);
-      _lookDummy.lookAt(camLook);
-      fpCamera.rotation.setFromQuaternion(_lookDummy.quaternion, "YXZ");
+      fpCamera.position.copy(camPos);
+      fpCamera.lookAt(camLook);
       fpCamera.updateMatrixWorld();
       syncComposerCamera(fpCamera);
 
