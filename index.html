@@ -153,6 +153,29 @@
         <span>Character</span>
       </button>
 
+      <button
+        type="button"
+        id="games-launch-btn"
+        class="cam-recenter-btn cam-games-btn"
+        aria-label="Browse all games"
+        title="Browse all games"
+      >
+        <span aria-hidden="true">🎮</span>
+        <span>Play</span>
+      </button>
+
+      <button
+        type="button"
+        id="audio-mute-btn"
+        class="cam-recenter-btn cam-audio-btn"
+        aria-label="Mute game audio"
+        aria-pressed="false"
+        title="Mute game audio"
+      >
+        <span aria-hidden="true" id="audio-mute-icon">🔊</span>
+        <span id="audio-mute-label">Sound</span>
+      </button>
+
       <div id="online-pill" class="online-pill" title="Players online" hidden>
         <span class="live-dot" aria-hidden="true"></span>
         <span id="online-count">1</span>
@@ -168,6 +191,12 @@
 
     <!-- Transient world note -->
     <div id="weave-toast" class="weave-toast" role="status" aria-live="polite" hidden></div>
+
+    <!-- Compass arrow pointing at the game table picked from the Play menu -->
+    <div id="game-target-marker" class="game-target-marker" hidden aria-hidden="true">
+      <span id="game-target-arrow" class="game-target-arrow">➤</span>
+      <span id="game-target-label" class="game-target-label">Game</span>
+    </div>
 
     <!-- Mobile First-Person Walk Joystick (forward/back + strafe) -->
     <div id="walk-joystick" class="walk-joystick" aria-label="Walk movement joystick" hidden>
@@ -367,6 +396,57 @@
 
     <dialog id="avatar-dialog" class="avatar-dialog" closedby="any" aria-label="Character customizer"></dialog>
     <dialog id="kids-quiz-dialog" class="kids-quiz-dialog" closedby="any" aria-label="Kids learning activity"></dialog>
+
+    <!-- Universal Play Browser: all arcade modes and in-world games in one place -->
+    <dialog id="games-dialog" class="games-dialog" closedby="any" aria-label="Browse all games">
+      <div class="games-dialog-head">
+        <div>
+          <h2>Play on IREOLUWA</h2>
+          <p>Pick a game to launch, or travel to a playable creation on the island.</p>
+        </div>
+        <button type="button" id="games-close-btn" class="games-close-btn" aria-label="Close games menu">✕</button>
+      </div>
+      <div class="games-toolbar">
+        <label class="games-toolbar-field">
+          <span>🤖 Board game difficulty</span>
+          <select id="games-ai-difficulty">
+            <option value="easy">Easy — relaxed</option>
+            <option value="normal" selected>Normal — fair</option>
+            <option value="hard">Hard — near-perfect</option>
+            <option value="gemini">Gemini boss — live AI</option>
+          </select>
+        </label>
+        <label class="games-toolbar-field games-checkbox-field">
+          <span>🌐 Board games</span>
+          <span class="games-checkbox-row">
+            <input type="checkbox" id="games-online-board" />
+            Play a visitor online
+          </span>
+        </label>
+        <label class="games-toolbar-field">
+          <span>🔊 Game volume</span>
+          <input type="range" id="games-volume" min="0" max="100" step="1" value="80" />
+        </label>
+        <span id="games-achievements" class="games-achievements">🏆 0 achievements</span>
+      </div>
+      <div class="games-tabs" role="tablist" aria-label="Game categories">
+        <button type="button" class="games-tab is-active" data-games-filter="all" role="tab" aria-selected="true">All</button>
+        <button type="button" class="games-tab" data-games-filter="arcade" role="tab" aria-selected="false">Arcade</button>
+        <button type="button" class="games-tab" data-games-filter="in_world" role="tab" aria-selected="false">In the world</button>
+      </div>
+      <div id="games-list" class="games-list"></div>
+      <section id="games-spectate" class="games-spectate" aria-label="Live game spectating">
+        <div class="games-spectate-head">
+          <strong>👀 Spectate live games</strong>
+          <button type="button" id="games-spectate-refresh" class="games-spectate-refresh">Refresh</button>
+        </div>
+        <div id="games-spectate-feed" class="games-spectate-feed">Loading live games…</div>
+      </section>
+      <div class="games-footer">
+        <span id="games-leaderboard" class="games-leaderboard">Play a game to start your local leaderboard.</span>
+        <button type="button" id="games-reset-btn" class="games-reset-btn">Reset game progress</button>
+      </div>
+    </dialog>
 
     <script type="module" src="/client/app.js"></script>
   </body>

@@ -11,8 +11,10 @@ import { redactSecrets, safeLogError, safeLogWarn, sanitizePlainText } from "./s
 import type { VoxelBlueprint } from "./types";
 import {
   auditBlueprintOverlaps,
+  auditInteractiveGameGeometry,
   autoRepairBlueprintOverlaps,
   formatAuditFeedbackForArgon,
+  type GameGeometryAudit,
 } from "./voxel_audit";
 import { type CriticReviewResult, reviewBlueprintWithCritic } from "./voxel_critic";
 import { normalizeAndGroundBlueprint } from "./voxel_dsl";
@@ -351,6 +353,7 @@ export async function sculptWithArgon(
     rawJson: Record<string, unknown>;
     rawVoxels: number;
     overlapCells: number;
+    gameGeometry: GameGeometryAudit | null;
     critic: CriticReviewResult | null;
     attemptNumber: number;
   }
@@ -365,6 +368,7 @@ export async function sculptWithArgon(
       contextText: promptText,
     });
     const draftAudit = auditBlueprintOverlaps(rawDraft);
+    const gameGeometry = auditInteractiveGameGeometry(rawDraft);
     const repairedBp = autoRepairBlueprintOverlaps(rawDraft).blueprint;
 
     let critic: CriticReviewResult | null = null;
@@ -390,6 +394,7 @@ export async function sculptWithArgon(
       rawJson,
       rawVoxels: rawDraft.stats.voxels,
       overlapCells: draftAudit.overlapCells,
+      gameGeometry,
       critic,
       attemptNumber,
     };
@@ -411,8 +416,9 @@ export async function sculptWithArgon(
     const needsVolume = current.rawVoxels < 160;
     const needsCollision = current.overlapCells >= 42;
     const criticRejected = current.critic ? !current.critic.approved : false;
+    const gameGeometryRejected = Boolean(current.gameGeometry && !current.gameGeometry.ok);
 
-    if (!needsVolume && !needsCollision && !criticRejected) {
+    if (!needsVolume && !needsCollision && !criticRejected && !gameGeometryRejected) {
       break;
     }
     if (Date.now() - tStart > MAX_LOOP_BUDGET_MS) {
@@ -435,6 +441,11 @@ export async function sculptWithArgon(
           `- Mandatory 3D Rebuild Instructions: ${current.critic.rebuildInstructions}`,
           `Look carefully at the attached 4-panel 3D render of your rejected draft (Panel 1: Iso Front, Panel 2: Iso Back, Panel 3: Front/Side Elevations, Panel 4: Top-Down). Re-sculpt the 3D geometry cleanly so it unmistakably matches the user's prompt with proper orientation, concave/open-top carving where needed, and zero leftover CSG roof/arch artifacts!`,
         ].join("\n"),
+      );
+    }
+    if (gameGeometryRejected && current.gameGeometry) {
+      notes.push(
+        `INTERACTIVE GAME GEOMETRY CHECK FAILED FOR ${current.gameGeometry.kind}:\n${current.gameGeometry.issues.map((issue) => `- ${issue}`).join("\n")}\nRe-sculpt the ${current.gameGeometry.kind} creation so the live game board can mount cleanly.`,
       );
     }
     if (needsVolume) {

@@ -2,6 +2,31 @@ import { createMeadowWorldEngine } from "./voxel/meadow_engine.js";
 import { createCharacterBuilderController } from "./character_builder.js";
 import { createMultiplayerClient } from "./multiplayer_client.js";
 import { createKidsModeController, filterWorldForKidsMode } from "./kids_mode.js";
+import {
+  ALL_GAMES,
+  ARCADE_GAMES,
+  IN_WORLD_GAMES,
+  findGame,
+} from "./games_catalogue.js";
+import {
+  addRemoteScore,
+  awardAchievement,
+  getAchievementCount,
+  getBest,
+  getLastResult,
+  getLowest,
+  getProgress,
+  getSetting,
+  recordLastResult,
+  resetGameProgress,
+  setSetting,
+  subscribeProgress,
+} from "./game_progress.js";
+import {
+  getGameAudioSettings,
+  setGameAudioMuted,
+  setGameAudioVolume,
+} from "./voxel/game_audio.js";
 
 const urlParams = new URLSearchParams(location.search);
 const isOgCapture = urlParams.get("og") === "1";
@@ -82,6 +107,25 @@ const arcadeAutoDriveBtn = document.getElementById("arcade-autodrive-btn");
 const arcadeRunnerControls = document.getElementById("arcade-runner-controls");
 const arcadeBalloonControls = document.getElementById("arcade-balloon-controls");
 const arcadeBalloonMissionEl = document.getElementById("arcade-balloon-mission");
+
+const gamesLaunchBtn = document.getElementById("games-launch-btn");
+const gamesDialog = document.getElementById("games-dialog");
+const gamesCloseBtn = document.getElementById("games-close-btn");
+const gamesListEl = document.getElementById("games-list");
+const gamesDifficultyEl = document.getElementById("games-ai-difficulty");
+const gamesVolumeEl = document.getElementById("games-volume");
+const gamesOnlineBoardEl = document.getElementById("games-online-board");
+const gamesAchievementsEl = document.getElementById("games-achievements");
+const gamesLeaderboardEl = document.getElementById("games-leaderboard");
+const gamesResetBtn = document.getElementById("games-reset-btn");
+const gamesSpectateEl = document.getElementById("games-spectate");
+const gamesSpectateRefreshBtn = document.getElementById("games-spectate-refresh");
+const gameTargetMarkerEl = document.getElementById("game-target-marker");
+const gameTargetArrowEl = document.getElementById("game-target-arrow");
+const gameTargetLabelEl = document.getElementById("game-target-label");
+const audioMuteBtn = document.getElementById("audio-mute-btn");
+const audioMuteIcon = document.getElementById("audio-mute-icon");
+const audioMuteLabel = document.getElementById("audio-mute-label");
 
 // UI states: "idle" | "picking" | "composing" | "building" | "ready" | "placed"
 let uiState = "idle";
@@ -224,6 +268,7 @@ function syncArcadeHud(hudState) {
   const mode = hudState.mode;
   const isFinishedOverlay =
     (mode === "subway_runner" && Boolean(hudState.gameOver)) ||
+    (mode === "balloon_pop" && Boolean(hudState.gameOver)) ||
     (mode === "car_drive" && Boolean(hudState.raceFinished));
 
   if (arcadeCarControls) {
@@ -232,7 +277,9 @@ function syncArcadeHud(hudState) {
   if (arcadeRunnerControls) {
     arcadeRunnerControls.hidden = mode !== "subway_runner" || Boolean(hudState.gameOver);
   }
-  if (arcadeBalloonControls) arcadeBalloonControls.hidden = mode !== "balloon_pop";
+  if (arcadeBalloonControls) {
+    arcadeBalloonControls.hidden = mode !== "balloon_pop" || Boolean(hudState.gameOver);
+  }
 
   if (mode === "car_drive" && arcadeAutoDriveBtn) {
     const autoOn = Boolean(hudState.autoDrive);
@@ -253,6 +300,15 @@ function syncArcadeHud(hudState) {
       if (arcadePlayAgainBtn) {
         arcadePlayAgainBtn.textContent = mode === "car_drive" ? "🏁 Race Again" : "🔄 Play Again";
       }
+      const resultKey = `${mode}:${hudState.finishText || hudState.subLabel || ""}`;
+      if (resultKey !== lastRecordedResultKey) {
+        lastRecordedResultKey = resultKey;
+        recordLastResult(mode, {
+          score: hudState.scoreValue,
+          label: hudState.finishText || hudState.subLabel || "Round complete",
+        });
+      }
+      void publishGameScore(mode, hudState.scoreValue);
     }
   }
 
@@ -652,6 +708,368 @@ arcadeRunnerControls?.querySelectorAll("[data-arcade-tap]").forEach((btn) => {
     else if (act === "slide") engine?.arcadeControl?.("slide");
   });
 });
+
+// ─── Universal Play Browser & shared game progress ──────────────────────────
+let gamesFilter = "all";
+let lastPublishedScoreKey = "";
+let lastRecordedResultKey = "";
+const gameEventListeners = new Set();
+const spectateEvents = [];
+const sharedLeaderboards = {};
+const liveRaceGhosts = new Map();
+let gameTarget = null;
+const gameClientId = `gi-${Math.random().toString(36).slice(2, 10)}`;
+
+window.__geminIslandGameEvents = {
+  clientId: gameClientId,
+  subscribe(listener) {
+    if (typeof listener !== "function") return () => {};
+    gameEventListeners.add(listener);
+    return () => gameEventListeners.delete(listener);
+  },
+  publish(payload) {
+    gameEventListeners.forEach((listener) => listener(payload));
+    return fetch("/api/game-events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-meadow-client": "1",
+        ...buildVisitorHeaders(),
+      },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  },
+};
+
+function escapeGameHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function syncAudioControls() {
+  const audio = getGameAudioSettings();
+  audioMuteBtn?.classList.toggle("is-muted", audio.muted);
+  audioMuteBtn?.setAttribute("aria-pressed", audio.muted ? "true" : "false");
+  if (audioMuteIcon) audioMuteIcon.textContent = audio.muted ? "🔇" : "🔊";
+  if (audioMuteLabel) audioMuteLabel.textContent = audio.muted ? "Muted" : "Sound";
+  if (gamesVolumeEl) gamesVolumeEl.value = String(Math.round(audio.volume * 100));
+}
+
+function currentGameHighlightEntries() {
+  const byKind = new Map();
+  for (const entry of engine?.getInteractiveDirectory?.() || []) {
+    if (entry.kind && !byKind.has(entry.kind)) byKind.set(entry.kind, entry);
+  }
+  return IN_WORLD_GAMES.map((game) => {
+    const target = byKind.get(game.id);
+    return target
+      ? { id: target.id, name: game.title, x: target.x, z: target.z, color: game.color }
+      : null;
+  }).filter(Boolean);
+}
+
+function updateGameTargetMarker() {
+  if (!gameTargetMarkerEl) return;
+  if (!gameTarget || engine?.isArcadeActive?.()) {
+    gameTargetMarkerEl.hidden = true;
+    return;
+  }
+  const cam = engine?.getCameraState?.() || {};
+  const from = engine?.getCameraTarget?.() || { x: 0, z: 0 };
+  const dx = gameTarget.x - from.x;
+  const dz = gameTarget.z - from.z;
+  const distance = Math.hypot(dx, dz);
+  if (!Number.isFinite(distance)) {
+    gameTargetMarkerEl.hidden = true;
+    return;
+  }
+  gameTargetMarkerEl.hidden = false;
+  const fwdX = cam.fpActive ? -Math.sin(cam.fpYaw || 0) : Math.sin(cam.az || 0);
+  const fwdZ = cam.fpActive ? -Math.cos(cam.fpYaw || 0) : Math.cos(cam.az || 0);
+  const rightX = cam.fpActive ? Math.cos(cam.fpYaw || 0) : Math.cos(cam.az || 0);
+  const rightZ = cam.fpActive ? -Math.sin(cam.fpYaw || 0) : -Math.sin(cam.az || 0);
+  const angle = Math.atan2(dx * rightX + dz * rightZ, dx * fwdX + dz * fwdZ);
+  if (gameTargetArrowEl) {
+    gameTargetArrowEl.style.transform = `rotate(${(angle * 180) / Math.PI - 90}deg)`;
+  }
+  if (gameTargetLabelEl) {
+    gameTargetLabelEl.textContent = `${gameTarget.name} · ${Math.round(distance)}m away`;
+  }
+}
+
+function focusGameTarget(target) {
+  gameTarget = target || null;
+  engine?.focusCreationById?.(target.id);
+  showToast(`${target.name} — follow the glowing marker and compass arrow!`, 4200);
+  updateGameTargetMarker();
+}
+
+window.setInterval(updateGameTargetMarker, 200);
+
+function currentInteractiveTargets() {
+  const byKind = new Map();
+  const directory = engine?.getInteractiveDirectory?.() || [];
+  for (const entry of directory) {
+    if (entry.kind && !byKind.has(entry.kind)) byKind.set(entry.kind, entry);
+  }
+  return byKind;
+}
+
+function renderGamesMenu() {
+  if (!gamesListEl) return;
+  const targets = currentInteractiveTargets();
+  const visibleGames =
+    gamesFilter === "arcade"
+      ? ARCADE_GAMES
+      : gamesFilter === "in_world"
+        ? IN_WORLD_GAMES
+        : ALL_GAMES;
+
+  gamesListEl.innerHTML = visibleGames
+    .map((game) => {
+      const isArcade = ARCADE_GAMES.includes(game);
+      const target = isArcade ? null : targets.get(game.id);
+      const rawBest = game.bestMetric === "moves"
+        ? getLowest(game.id, game.bestMetric)
+        : getBest(game.id, game.bestMetric);
+      const bestText = rawBest > 0 ? `Best ${rawBest}` : "No record yet";
+      const buttonLabel = isArcade ? "Launch" : target ? "Go there" : "Not placed";
+      const statusText = isArcade
+        ? "Dedicated 3D arena"
+        : target
+          ? `In the world · ${escapeGameHtml(target.name)}`
+          : "Sculpt one or find it later";
+      const lastResult = getLastResult(game.id);
+      const lastText = lastResult
+        ? `Last round: ${escapeGameHtml(lastResult.label)}${lastResult.score > 0 ? ` · ${lastResult.score}` : ""}`
+        : "No round played yet";
+      return `
+        <article class="game-card">
+          <div class="game-card-head">
+            <span class="game-card-icon" style="background:${escapeGameHtml(game.color)}" aria-hidden="true">${escapeGameHtml(game.icon)}</span>
+            <span class="game-card-title">${escapeGameHtml(game.title)}</span>
+            <span class="game-card-tag">${escapeGameHtml(game.category)}</span>
+          </div>
+          <div class="game-card-howto">
+            <p><strong>How to play</strong></p>
+            <p>🎯 ${escapeGameHtml(game.objective)}</p>
+            <p>🕹️ ${escapeGameHtml(game.controls)}</p>
+            <p>🏁 ${escapeGameHtml(game.winCondition || "Beat your personal best.")}</p>
+            <span class="game-card-last">${lastText}</span>
+          </div>
+          <div class="game-card-footer">
+            <span class="game-card-best">🏆 ${bestText}</span>
+            <button type="button" class="game-card-button" data-game-id="${escapeGameHtml(game.id)}" ${!isArcade && !target ? "disabled" : ""}>${buttonLabel}</button>
+          </div>
+          <span class="game-card-controls">${statusText}</span>
+        </article>`;
+    })
+    .join("");
+
+  engine?.setGameHighlights?.(currentGameHighlightEntries());
+  if (gamesAchievementsEl) {
+    gamesAchievementsEl.textContent = `🏆 ${getAchievementCount()} achievements`;
+  }
+  if (gamesDifficultyEl) gamesDifficultyEl.value = getSetting("aiDifficulty", "normal");
+  if (gamesOnlineBoardEl) gamesOnlineBoardEl.checked = getSetting("boardMode", "local") === "online";
+  updateGamesLeaderboard();
+}
+
+function updateGamesLeaderboard() {
+  if (!gamesLeaderboardEl) return;
+  const rows = ARCADE_GAMES.map((game) => ({
+    title: game.title,
+    score: getBest(game.id, game.bestMetric),
+  }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  const shared = Object.entries(sharedLeaderboards)
+    .map(([gameId, entries]) => {
+      const top = Array.isArray(entries) ? entries[0] : null;
+      return top && Number(top.score) > 0
+        ? `${findGame(gameId)?.shortLabel || findGame(gameId)?.title || gameId}: ${escapeGameHtml(String(top.name))} ${Number(top.score)}`
+        : null;
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+  const localText = rows.length
+    ? `Your bests: ${rows.map((row) => `<strong>${escapeGameHtml(row.title)} ${row.score}</strong>`).join(" · ")}`
+    : "Play a game to start your local leaderboard.";
+  gamesLeaderboardEl.innerHTML = `${localText}${shared.length ? `<br />Live leaders: ${shared.join(" · ")}` : ""}`;
+}
+
+function renderSpectateFeed(rows) {
+  if (!gamesSpectateEl) return;
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    gamesSpectateEl.innerHTML = '<div class="games-spectate-row">No live games yet — open a board or start a race.</div>';
+    return;
+  }
+  gamesSpectateEl.innerHTML = list
+    .slice(0, 8)
+    .map((entry) => {
+      const gameTitle = findGame(entry.game)?.title || escapeGameHtml(String(entry.game || "Game"));
+      const detail =
+        entry.kind === "score"
+          ? `score ${Number(entry.score) || 0}`
+          : entry.kind === "challenge"
+            ? "issued a challenge"
+            : entry.kind === "move"
+              ? `played move ${Number(entry.move) || 0}`
+              : `lap ${Number(entry.lap) || 1} · ${Number(entry.rank) || 4}${ordinalSuffix(Number(entry.rank) || 4)}`;
+      return `<div class="games-spectate-row">👀 ${escapeGameHtml(String(entry.name || "Explorer"))} · ${escapeGameHtml(gameTitle)} · ${escapeGameHtml(detail)}</div>`;
+    })
+    .join("");
+}
+
+function ordinalSuffix(n) {
+  return n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th";
+}
+
+async function refreshSpectateFeed() {
+  try {
+    const response = await fetch("/api/game-events", { headers: buildVisitorHeaders() });
+    if (!response.ok) return;
+    const data = await response.json();
+    spectateEvents.length = 0;
+    spectateEvents.push(...(Array.isArray(data?.recentEvents) ? data.recentEvents.slice(0, 8) : []));
+    if (data?.leaderboards && typeof data.leaderboards === "object") {
+      Object.keys(sharedLeaderboards).forEach((key) => delete sharedLeaderboards[key]);
+      Object.assign(sharedLeaderboards, data.leaderboards);
+    }
+    renderSpectateFeed(spectateEvents);
+    updateGamesLeaderboard();
+  } catch {
+    renderSpectateFeed([]);
+  }
+}
+
+gamesSpectateRefreshBtn?.addEventListener("click", () => {
+  void refreshSpectateFeed();
+  gamesSpectateRefreshBtn.blur();
+});
+
+function openGamesMenu() {
+  if (!gamesDialog) return;
+  renderGamesMenu();
+  void refreshSpectateFeed();
+  if (typeof gamesDialog.showModal === "function") gamesDialog.showModal();
+  else gamesDialog.hidden = false;
+}
+
+async function publishGameScore(gameId, score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric) || numeric < 0) return;
+  const key = `${gameId}:${Math.round(numeric)}`;
+  if (key === lastPublishedScoreKey) return;
+  lastPublishedScoreKey = key;
+  try {
+    await fetch("/api/game-events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-meadow-client": "1",
+        ...buildVisitorHeaders(),
+      },
+      body: JSON.stringify({ kind: "score", game: gameId, score: Math.round(numeric) }),
+    });
+  } catch {
+    // Shared leaderboards are best-effort; local bests are already stored.
+  }
+}
+
+gamesLaunchBtn?.addEventListener("click", () => {
+  openGamesMenu();
+  gamesLaunchBtn.blur();
+});
+
+gamesCloseBtn?.addEventListener("click", () => {
+  if (typeof gamesDialog?.close === "function") gamesDialog.close();
+  else if (gamesDialog) gamesDialog.hidden = true;
+});
+gamesDialog?.addEventListener("close", () => {
+  engine?.setGameHighlights?.([]);
+});
+
+document.querySelectorAll("[data-games-filter]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    gamesFilter = tab.getAttribute("data-games-filter") || "all";
+    document.querySelectorAll("[data-games-filter]").forEach((other) => {
+      const active = other === tab;
+      other.classList.toggle("is-active", active);
+      other.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    renderGamesMenu();
+  });
+});
+
+gamesListEl?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-game-id]");
+  if (!button || button.disabled) return;
+  const game = findGame(button.getAttribute("data-game-id"));
+  if (!game) return;
+  if (typeof gamesDialog?.close === "function") gamesDialog.close();
+  else if (gamesDialog) gamesDialog.hidden = true;
+  if (ARCADE_GAMES.includes(game)) {
+    gameTarget = null;
+    if (gameTargetMarkerEl) gameTargetMarkerEl.hidden = true;
+    engine?.startArcadeGame?.(game.id);
+    return;
+  }
+  const target = currentInteractiveTargets().get(game.id);
+  if (target) {
+    focusGameTarget({ id: target.id, x: target.x, z: target.z, name: game.title });
+  }
+});
+
+gamesDifficultyEl?.addEventListener("change", () => {
+  setSetting("aiDifficulty", gamesDifficultyEl.value);
+  showToast(`Board game difficulty: ${gamesDifficultyEl.selectedOptions[0]?.textContent || gamesDifficultyEl.value}`);
+});
+
+gamesOnlineBoardEl?.addEventListener("change", () => {
+  setSetting("boardMode", gamesOnlineBoardEl.checked ? "online" : "local");
+  showToast(
+    gamesOnlineBoardEl.checked
+      ? "Online board games on — open a board to invite a visitor."
+      : "Board games are local again.",
+  );
+});
+
+gamesVolumeEl?.addEventListener("input", () => {
+  setGameAudioVolume(Number(gamesVolumeEl.value) / 100);
+  syncAudioControls();
+});
+
+audioMuteBtn?.addEventListener("click", () => {
+  const audio = getGameAudioSettings();
+  setGameAudioMuted(!audio.muted);
+  syncAudioControls();
+  audioMuteBtn.blur();
+});
+
+gamesResetBtn?.addEventListener("click", () => {
+  if (!window.confirm("Reset all game bests and achievements?")) return;
+  resetGameProgress();
+  setGameAudioVolume(getSetting("audioVolume", 0.8));
+  setGameAudioMuted(Boolean(getSetting("audioMuted", false)));
+  setSetting("aiDifficulty", "normal");
+  setSetting("boardMode", "local");
+  syncAudioControls();
+  renderGamesMenu();
+  showToast("Game progress reset.");
+});
+
+subscribeProgress(() => {
+  syncAudioControls();
+  if (gamesDialog && !gamesDialog.hidden) renderGamesMenu();
+});
+syncAudioControls();
 
 camPanBtn?.addEventListener("click", () => {
   engine.setDragMode("pan");
@@ -1228,6 +1646,32 @@ document.addEventListener("visibilitychange", () => {
 
 function handleWorldMessage(msg) {
   if (!msg || typeof msg !== "object") return;
+  if (msg.type === "game_event") {
+    spectateEvents.unshift(msg);
+    spectateEvents.length = Math.min(spectateEvents.length, 8);
+    if (gamesDialog && !gamesDialog.hidden) renderSpectateFeed(spectateEvents);
+    if (msg.kind === "score") {
+      addRemoteScore(msg.game, { name: msg.name || "Explorer", score: msg.score });
+      updateGamesLeaderboard();
+      gameEventListeners.forEach((listener) => listener(msg));
+    } else if (msg.kind === "challenge") {
+      showToast(`${msg.name || "An explorer"} challenged you to ${findGame(msg.game)?.title || "a game"}!`, 5200);
+      gameEventListeners.forEach((listener) => listener(msg));
+    } else if (msg.kind === "move") {
+      gameEventListeners.forEach((listener) => listener(msg));
+    } else if (msg.kind === "position") {
+      if (msg.clientId && msg.clientId !== gameClientId) {
+        liveRaceGhosts.set(msg.clientId, { ...msg, seenAt: Date.now() });
+      }
+      const now = Date.now();
+      for (const [id, ghost] of liveRaceGhosts) {
+        if (now - ghost.seenAt > 5_000) liveRaceGhosts.delete(id);
+      }
+      engine?.setRemoteRaceGhosts?.([...liveRaceGhosts.values()]);
+      gameEventListeners.forEach((listener) => listener(msg));
+    }
+    return;
+  }
   if (msg.type === "queue_tick" && activeJob && uiState === "building") {
     const qIdx = Array.isArray(msg.queuedIds) ? msg.queuedIds.indexOf(activeJob.jobId) : -1;
     const activeEntry = Array.isArray(msg.sculpting)

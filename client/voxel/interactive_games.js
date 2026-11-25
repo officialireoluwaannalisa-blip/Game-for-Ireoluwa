@@ -8,72 +8,41 @@ import { Vox, buildVoxelMesh } from "./vox.js";
 
 export const INTERACTIVE_HIT_LAYER = 2;
 
-// ─── Procedural WebAudio Micro-Synth (unlocked only on user gesture) ──────────
-let audioCtx = null;
+// ─── Procedural WebAudio Micro-Synth (shared master gain + spatial falloff) ───
+import {
+  ensureGameAudio,
+  playGameArpeggio,
+  playGameNoise,
+  playGameTone,
+  withGameAudioSource,
+} from "./game_audio.js";
+import {
+  awardAchievement,
+  claimMilestone,
+  getBest,
+  getLowest,
+  getSetting,
+  recordBest,
+  recordLastResult,
+  recordLowest,
+} from "../game_progress.js";
+import { chooseLocalMove, pickQuip } from "./minigame_ai_local.js";
+import { findConnectFourWinner, findTicTacToeWinner } from "./game_rules.js";
 
 function ensureAudio() {
-  if (typeof window === "undefined") return null;
-  const Ctor = window.AudioContext || window.webkitAudioContext;
-  if (!Ctor) return null;
-  if (!audioCtx) {
-    try {
-      audioCtx = new Ctor();
-    } catch {
-      return null;
-    }
-  }
-  if (audioCtx.state === "suspended") {
-    audioCtx.resume().catch(() => {});
-  }
-  return audioCtx;
+  return ensureGameAudio();
 }
 
 function playTone(freq = 440, dur = 0.14, type = "triangle", gainPeak = 0.075, delaySec = 0) {
-  if (!audioCtx || audioCtx.state !== "running") return;
-  try {
-    const t0 = audioCtx.currentTime + delaySec;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(Math.max(40, freq), t0);
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(gainPeak, t0 + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.02);
-  } catch {
-    // Ignore audio context edge errors
-  }
+  playGameTone(freq, dur, type, gainPeak, delaySec);
 }
 
 function playArpeggio(freqs, stepSec = 0.075, dur = 0.18, type = "triangle", gainPeak = 0.07) {
-  freqs.forEach((f, idx) => playTone(f, dur, type, gainPeak, idx * stepSec));
+  playGameArpeggio(freqs, stepSec, dur, type, gainPeak);
 }
 
 function playBurstNoise(dur = 0.16, gainPeak = 0.055, delaySec = 0) {
-  if (!audioCtx || audioCtx.state !== "running") return;
-  try {
-    const sr = audioCtx.sampleRate;
-    const len = Math.max(256, Math.floor(sr * dur));
-    const buf = audioCtx.createBuffer(1, len, sr);
-    const ch = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      ch[i] = (Math.random() * 2 - 1) * Math.exp((-i / len) * 3.2);
-    }
-    const src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    const gain = audioCtx.createGain();
-    const t0 = audioCtx.currentTime + delaySec;
-    gain.gain.setValueAtTime(gainPeak, t0);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    src.connect(gain);
-    gain.connect(audioCtx.destination);
-    src.start(t0);
-  } catch {
-    // Ignore
-  }
+  playGameNoise(dur, gainPeak, delaySec);
 }
 
 // ─── Shared Invisible Raycast Hit Material (Layer 2 Only) ────────────────────
@@ -179,17 +148,67 @@ function buildTallyPipMesh(color, emit = 1.2) {
   return buildVoxelMesh(v, { scale: 0.055, depthLayer: 4 });
 }
 
-// ─── Live Gemini Flash-Lite Opponent Client (/api/minigame-move) ─────────────
-async function requestGeminiFlashLiteMove(payload, fallbackValidMoves) {
-  const minBeat = new Promise((r) => setTimeout(r, 260));
-  if (typeof fetch !== "function" || typeof window === "undefined") {
+// ─── Opponent Client: instant local AI by default, optional Gemini "boss" ────
+function opponentLabel(modelUsed) {
+  return typeof modelUsed === "string" && /gemini|hydrogen/i.test(modelUsed)
+    ? "Gemini Flash-Lite"
+    : "Island AI";
+}
+
+function isOnlineBoard() {
+  return getSetting("boardMode", "local") === "online";
+}
+
+function gameEventBus() {
+  return typeof window !== "undefined" ? window.__geminIslandGameEvents || null : null;
+}
+
+function subscribeBoardEvents(gameId, handler) {
+  const bus = gameEventBus();
+  if (!bus || typeof bus.subscribe !== "function") return () => {};
+  return bus.subscribe((msg) => {
+    if (
+      !msg ||
+      msg.type !== "game_event" ||
+      msg.game !== gameId ||
+      msg.clientId === bus.clientId
+    ) return;
+    handler(msg);
+  });
+}
+
+function publishBoardEvent(gameId, payload) {
+  const bus = gameEventBus();
+  if (!bus || typeof bus.publish !== "function") return;
+  void bus.publish({ game: gameId, clientId: bus.clientId, ...payload });
+}
+
+async function requestAiMove(payload, validMoves) {
+  const minBeat = new Promise((r) => setTimeout(r, 240));
+  const difficulty = String(payload.difficulty || getSetting("aiDifficulty", "normal"));
+  const state = payload.game === "tic_tac_toe" ? payload.board : payload.grid;
+  const localFallback = () => {
+    const localMove = chooseLocalMove(payload.game, state, "hard");
+    return validMoves.includes(localMove) ? localMove : (validMoves[0] ?? -1);
+  };
+
+  if (difficulty !== "gemini") {
     await minBeat;
+    const move = chooseLocalMove(payload.game, state, difficulty);
     return {
-      move: fallbackValidMoves[Math.floor(fallbackValidMoves.length / 2)] ?? fallbackValidMoves[0] ?? -1,
-      quip: "",
-      modelUsed: "offline",
+      move: validMoves.includes(move) ? move : localFallback(),
+      quip: pickQuip(payload.game, difficulty),
+      modelUsed: `local-${difficulty}`,
     };
   }
+
+  if (typeof fetch !== "function" || typeof window === "undefined") {
+    await minBeat;
+    return { move: localFallback(), quip: "", modelUsed: "offline" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6_500);
   try {
     const [res] = await Promise.all([
       fetch("/api/minigame-move", {
@@ -201,13 +220,14 @@ async function requestGeminiFlashLiteMove(payload, fallbackValidMoves) {
             ? window.__geminIslandVisitorHeaders()
             : {}),
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, difficulty: "gemini" }),
+        signal: controller.signal,
       }),
       minBeat,
     ]);
     if (res.ok) {
       const data = await res.json();
-      if (data?.ok && fallbackValidMoves.includes(data.move)) {
+      if (data?.ok && validMoves.includes(data.move)) {
         return {
           move: data.move,
           quip: typeof data.quip === "string" ? data.quip.trim() : "",
@@ -216,12 +236,14 @@ async function requestGeminiFlashLiteMove(payload, fallbackValidMoves) {
       }
     }
   } catch {
-    // Graceful network hiccup fallback so the 3D board never locks up
+    // Abort/network failures fall back to a strong local opponent, never a stalled board.
+  } finally {
+    clearTimeout(timeout);
   }
   return {
-    move: fallbackValidMoves[Math.floor(fallbackValidMoves.length / 2)] ?? fallbackValidMoves[0] ?? -1,
+    move: localFallback(),
     quip: "",
-    modelUsed: "fallback",
+    modelUsed: "fallback-local",
   };
 }
 
@@ -238,14 +260,7 @@ const TTT_LINES = [
 ];
 
 function checkTttWinner(board) {
-  for (const line of TTT_LINES) {
-    const [a, b, c] = line;
-    if (board[a] !== 0 && board[a] === board[b] && board[a] === board[c]) {
-      return { winner: board[a], line };
-    }
-  }
-  if (board.every((v) => v !== 0)) return { winner: 3, line: null }; // draw
-  return null;
+  return findTicTacToeWinner(board);
 }
 
 function createTicTacToeController(creation, group, onEvent) {
@@ -346,6 +361,12 @@ function createTicTacToeController(creation, group, onEvent) {
   let cpuThinking = false;
   let turnToken = 0;
   let disposed = false;
+  let opponent = "Island AI";
+  let aiStatusShown = false;
+  let onlineMode = isOnlineBoard();
+  let matchId = "";
+  let remoteTurn = false;
+  let unsubscribeBoard = null;
   let gameOver = null; // { winner: 1|2|3, line, age }
 
   function rebuildTally() {
@@ -383,13 +404,15 @@ function createTicTacToeController(creation, group, onEvent) {
     board.fill(0);
     gameOver = null;
     cpuThinking = false;
+    if (onlineMode) remoteTurn = false;
     thinkOrb.visible = false;
     syncBoardMeshes();
   }
 
-  function placeMark(idx, who, quip = "") {
+  function placeMark(idx, who, quip = "", modelUsed = "") {
     board[idx] = who;
     cellHolders[idx].pop = 0.05;
+    if (who === 2 && modelUsed) opponent = opponentLabel(modelUsed);
     const outcome = checkTttWinner(board);
     if (outcome) {
       gameOver = { ...outcome, age: 0 };
@@ -398,35 +421,74 @@ function createTicTacToeController(creation, group, onEvent) {
       if (outcome.winner === 1) {
         playerWins++;
         rebuildTally();
+        const improved = recordBest("tic_tac_toe", "wins", playerWins);
+        recordLastResult("tic_tac_toe", { score: playerWins, label: `Won ${playerWins}–${cpuWins} against ${opponent}` });
+        claimMilestone("tic_tac_toe", `wins_${playerWins}`, `Won ${playerWins} games of Naughts & Crosses`);
         playArpeggio([523.25, 659.25, 783.99, 1046.5], 0.075, 0.22, "triangle", 0.085);
-        return `Naughts & Crosses — You beat Gemini Flash-Lite! (${playerWins}–${cpuWins})`;
+        return `Naughts & Crosses — You beat ${opponent}! (${playerWins}–${cpuWins})${improved ? " · New best!" : ""}`;
       } else if (outcome.winner === 2) {
         cpuWins++;
         rebuildTally();
         playArpeggio([440, 392, 329.63], 0.09, 0.22, "sawtooth", 0.055);
-        return `Naughts & Crosses — Gemini Flash-Lite wins! (${playerWins}–${cpuWins})${quipSuffix}`;
+        return `Naughts & Crosses — ${opponent} wins! (${playerWins}–${cpuWins})${quipSuffix}`;
       } else {
         playArpeggio([440, 523.25, 440], 0.08, 0.18, "triangle", 0.065);
-        return `Naughts & Crosses — Draw vs Gemini Flash-Lite!${quipSuffix}`;
+        return `Naughts & Crosses — Draw vs ${opponent}!${quipSuffix}`;
       }
     }
     syncBoardMeshes();
     playTone(who === 1 ? 587.33 : 440, 0.11, "triangle", 0.075);
-    return quip ? `Gemini Flash-Lite — "${quip}"` : null;
+    return quip ? `${opponent} — "${quip}"` : null;
   }
 
-  function askGeminiFlashLiteTurn() {
+  onlineMode = isOnlineBoard();
+  unsubscribeBoard = subscribeBoardEvents("tic_tac_toe", (msg) => {
+    if (msg.kind === "challenge") {
+      if (!matchId) {
+        matchId = msg.matchId || `match-${Date.now()}`;
+        remoteTurn = true;
+        onEvent?.("Naughts & Crosses — A visitor joined your board!");
+      }
+      return;
+    }
+    if (msg.kind !== "move") return;
+    if (msg.move === -1) {
+      resetBoard();
+      remoteTurn = false;
+      return;
+    }
+    if (typeof msg.move !== "number" || msg.move < 0 || msg.move >= 9 || board[msg.move] !== 0) {
+      return;
+    }
+    cpuThinking = false;
+    thinkOrb.visible = false;
+    remoteTurn = false;
+    const reply = placeMark(msg.move, 2, "", "local-online");
+    if (reply) onEvent?.(reply);
+  });
+
+  function askOpponentTurn() {
     const empty = [];
     for (let i = 0; i < 9; i++) if (board[i] === 0) empty.push(i);
     if (!empty.length) return;
+    if (onlineMode) {
+      cpuThinking = true;
+      thinkOrb.visible = true;
+      return;
+    }
+    if (!aiStatusShown) {
+      aiStatusShown = true;
+      onEvent?.("Naughts & Crosses — Local Island AI is taking your turn (instant, deterministic).");
+    }
     const myToken = ++turnToken;
     cpuThinking = true;
     thinkOrb.visible = true;
-    requestGeminiFlashLiteMove(
+    requestAiMove(
       {
         game: "tic_tac_toe",
         board: [...board],
         creationName: creation.name,
+        difficulty: getSetting("aiDifficulty", "normal"),
       },
       empty,
     ).then((reply) => {
@@ -434,7 +496,7 @@ function createTicTacToeController(creation, group, onEvent) {
       cpuThinking = false;
       thinkOrb.visible = false;
       if (reply.move >= 0 && board[reply.move] === 0) {
-        const aiMsg = placeMark(reply.move, 2, reply.quip);
+        const aiMsg = placeMark(reply.move, 2, reply.quip, reply.modelUsed);
         if (aiMsg) onEvent?.(aiMsg);
       }
     });
@@ -462,21 +524,33 @@ function createTicTacToeController(creation, group, onEvent) {
     },
     trigger(action) {
       ensureAudio();
+      onlineMode = isOnlineBoard();
       const idx = typeof action?.cell === "number" ? action.cell : -1;
       if (gameOver) {
         if (gameOver.age < 0.45) return null;
         resetBoard();
+        if (onlineMode) publishBoardEvent("tic_tac_toe", { kind: "move", move: -1, matchId });
         if (idx >= 0 && idx < 9) {
           const msg = placeMark(idx, 1);
-          if (!gameOver) askGeminiFlashLiteTurn();
+          if (!gameOver) askOpponentTurn();
           return msg;
         }
         return null;
       }
-      if (cpuThinking) return null;
+      if (cpuThinking || (onlineMode && remoteTurn)) return null;
       if (idx < 0 || idx >= 9 || board[idx] !== 0) return null;
       const msg = placeMark(idx, 1);
-      if (!gameOver) askGeminiFlashLiteTurn();
+      if (!gameOver) {
+        if (onlineMode) {
+          if (!matchId) {
+            matchId = `ttt-${Date.now().toString(36)}-${Math.floor(Math.random() * 999)}`;
+            publishBoardEvent("tic_tac_toe", { kind: "challenge", matchId });
+          }
+          publishBoardEvent("tic_tac_toe", { kind: "move", move: idx, matchId });
+          remoteTurn = true;
+        }
+        askOpponentTurn();
+      }
       return msg;
     },
     step(dt, t) {
@@ -509,6 +583,7 @@ function createTicTacToeController(creation, group, onEvent) {
     dispose() {
       disposed = true;
       turnToken++;
+      unsubscribeBoard?.();
       protoX.geometry.dispose();
       protoO.geometry.dispose();
       protoXWin.geometry.dispose();
@@ -523,31 +598,7 @@ function createTicTacToeController(creation, group, onEvent) {
 
 // ─── 2. Connect Four (7x6 Vertical Drop Frame vs Gemini Flash-Lite) ──────────
 function checkConnectFourWin(grid) {
-  // grid[col][row], 7 cols x 6 rows (row 0 = bottom)
-  const dirs = [
-    [1, 0],
-    [0, 1],
-    [1, 1],
-    [1, -1],
-  ];
-  for (let c = 0; c < 7; c++) {
-    for (let r = 0; r < 6; r++) {
-      const who = grid[c][r];
-      if (!who) continue;
-      for (const [dc, dr] of dirs) {
-        const cells = [[c, r]];
-        for (let k = 1; k < 4; k++) {
-          const nc = c + dc * k;
-          const nr = r + dr * k;
-          if (nc < 0 || nc >= 7 || nr < 0 || nr >= 6 || grid[nc][nr] !== who) break;
-          cells.push([nc, nr]);
-        }
-        if (cells.length === 4) return { winner: who, cells };
-      }
-    }
-  }
-  const full = grid.every((col) => col[5] !== 0);
-  return full ? { winner: 3, cells: [] } : null;
+  return findConnectFourWinner(grid);
 }
 
 function createConnectFourController(creation, group, onEvent) {
@@ -623,6 +674,12 @@ function createConnectFourController(creation, group, onEvent) {
   let cpuThinking = false;
   let turnToken = 0;
   let disposed = false;
+  let opponent = "Island AI";
+  let aiStatusShown = false;
+  let onlineMode = isOnlineBoard();
+  let matchId = "";
+  let remoteTurn = false;
+  let unsubscribeBoard = null;
   let gameOver = null;
 
   function clearGame() {
@@ -632,13 +689,15 @@ function createConnectFourController(creation, group, onEvent) {
     while (discsGroup.children.length) discsGroup.remove(discsGroup.children[0]);
     gameOver = null;
     cpuThinking = false;
+    if (onlineMode) remoteTurn = false;
     thinkDisc.visible = false;
   }
 
-  function dropInColumn(c, who, quip = "") {
+  function dropInColumn(c, who, quip = "", modelUsed = "") {
     const r = grid[c].indexOf(0);
     if (r === -1) return null;
     grid[c][r] = who;
+    if (who === 2 && modelUsed) opponent = opponentLabel(modelUsed);
     const proto = who === 1 ? protoP1 : protoCpu;
     const m = new THREE.Mesh(proto.geometry, proto.material);
     m.position.set(colX(c), dropStartY, 0);
@@ -669,28 +728,67 @@ function createConnectFourController(creation, group, onEvent) {
       const quipSuffix = quip ? ` · "${quip}"` : "";
       if (outcome.winner === 1) {
         playArpeggio([523.25, 659.25, 783.99, 1046.5], 0.08, 0.24, "triangle", 0.085);
-        return "Connect Four — Four in a row! You beat Gemini Flash-Lite!";
+        const improved = recordBest("connect_four", "wins", 1);
+        recordLastResult("connect_four", { score: 1, label: `Beat ${opponent} with four in a row` });
+        claimMilestone("connect_four", "first_win", "Won a game of Connect Four");
+        return `Connect Four — Four in a row! You beat ${opponent}!${improved ? " · New best!" : ""}`;
       }
       if (outcome.winner === 2) {
         playArpeggio([440, 349.23, 293.66], 0.09, 0.24, "sawtooth", 0.055);
-        return `Connect Four — Gemini Flash-Lite connected four!${quipSuffix}`;
+        return `Connect Four — ${opponent} connected four!${quipSuffix}`;
       }
-      return `Connect Four — Full frame draw vs Gemini Flash-Lite!${quipSuffix}`;
+      return `Connect Four — Full frame draw vs ${opponent}!${quipSuffix}`;
     }
-    return quip ? `Gemini Flash-Lite — "${quip}"` : null;
+    return quip ? `${opponent} — "${quip}"` : null;
   }
 
-  function askGeminiFlashLiteColumn() {
+  onlineMode = isOnlineBoard();
+  unsubscribeBoard = subscribeBoardEvents("connect_four", (msg) => {
+    if (msg.kind === "challenge") {
+      if (!matchId) {
+        matchId = msg.matchId || `match-${Date.now()}`;
+        remoteTurn = true;
+        onEvent?.("Connect Four — A visitor joined your frame!");
+      }
+      return;
+    }
+    if (msg.kind !== "move") return;
+    if (msg.move === -1) {
+      clearGame();
+      remoteTurn = false;
+      return;
+    }
+    if (typeof msg.move !== "number" || msg.move < 0 || msg.move >= 7 || grid[msg.move].indexOf(0) === -1) {
+      return;
+    }
+    cpuThinking = false;
+    thinkDisc.visible = false;
+    remoteTurn = false;
+    const reply = dropInColumn(msg.move, 2, "", "local-online");
+    if (reply) onEvent?.(reply);
+  });
+
+  function askOpponentColumn() {
     const validCols = [0, 1, 2, 3, 4, 5, 6].filter((col) => grid[col].indexOf(0) !== -1);
     if (!validCols.length) return;
+    if (onlineMode) {
+      cpuThinking = true;
+      thinkDisc.visible = true;
+      return;
+    }
+    if (!aiStatusShown) {
+      aiStatusShown = true;
+      onEvent?.("Connect Four — Local Island AI is taking your turn (instant, deterministic).");
+    }
     const myToken = ++turnToken;
     cpuThinking = true;
     thinkDisc.visible = true;
-    requestGeminiFlashLiteMove(
+    requestAiMove(
       {
         game: "connect_four",
         grid: grid.map((col) => [...col]),
         creationName: creation.name,
+        difficulty: getSetting("aiDifficulty", "normal"),
       },
       validCols,
     ).then((reply) => {
@@ -698,7 +796,7 @@ function createConnectFourController(creation, group, onEvent) {
       cpuThinking = false;
       thinkDisc.visible = false;
       if (reply.move >= 0 && reply.move < 7 && grid[reply.move].indexOf(0) !== -1) {
-        const aiMsg = dropInColumn(reply.move, 2, reply.quip);
+        const aiMsg = dropInColumn(reply.move, 2, reply.quip, reply.modelUsed);
         if (aiMsg) onEvent?.(aiMsg);
       }
     });
@@ -725,20 +823,33 @@ function createConnectFourController(creation, group, onEvent) {
     },
     trigger(action) {
       ensureAudio();
+      onlineMode = isOnlineBoard();
       const c = typeof action?.col === "number" ? action.col : -1;
       if (gameOver) {
         if (gameOver.age < 0.5) return null;
         clearGame();
+        if (onlineMode) publishBoardEvent("connect_four", { kind: "move", move: -1, matchId });
         if (c >= 0 && c < 7) {
           const msg = dropInColumn(c, 1);
-          if (!gameOver) askGeminiFlashLiteColumn();
+          if (!gameOver) askOpponentColumn();
           return msg;
         }
         return null;
       }
-      if (cpuThinking || c < 0 || c >= 7 || grid[c].indexOf(0) === -1) return null;
+      if (cpuThinking || (onlineMode && remoteTurn)) return null;
+      if (c < 0 || c >= 7 || grid[c].indexOf(0) === -1) return null;
       const msg = dropInColumn(c, 1);
-      if (!gameOver) askGeminiFlashLiteColumn();
+      if (!gameOver) {
+        if (onlineMode) {
+          if (!matchId) {
+            matchId = `c4-${Date.now().toString(36)}-${Math.floor(Math.random() * 999)}`;
+            publishBoardEvent("connect_four", { kind: "challenge", matchId });
+          }
+          publishBoardEvent("connect_four", { kind: "move", move: c, matchId });
+          remoteTurn = true;
+        }
+        askOpponentColumn();
+      }
       return msg;
     },
     step(dt, t) {
@@ -773,6 +884,7 @@ function createConnectFourController(creation, group, onEvent) {
     dispose() {
       disposed = true;
       turnToken++;
+      unsubscribeBoard?.();
       frameMesh.geometry.dispose();
       protoP1.geometry.dispose();
       protoCpu.geometry.dispose();
@@ -785,7 +897,7 @@ function createConnectFourController(creation, group, onEvent) {
 }
 
 // ─── 3. Whack-a-Mole 3D Voxel Critter Bonk Arcade ────────────────────────────
-function createWhackAMoleController(creation, group) {
+function createWhackAMoleController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -971,6 +1083,10 @@ function createWhackAMoleController(creation, group) {
         if (activeRoundSec <= 0) {
           timerBar.visible = false;
           playArpeggio([523.25, 659.25, 783.99, 1046.5], 0.08, 0.2, "triangle", 0.07);
+          const improved = recordBest("whack_a_mole", "score", score);
+          recordLastResult("whack_a_mole", { score, label: `${score} hits in the last round` });
+          claimMilestone("whack_a_mole", `score_${score}`, `Scored ${score} in Whack-a-Mole`);
+          onEvent?.(`Whack-a-Mole — Round over! Score ${score}${improved ? " · New best!" : ""} · Click to play again`);
         }
       } else {
         // Gentle idle peek every ~3.4s so the garden cabinet looks alive in the world
@@ -1037,7 +1153,7 @@ const PIANO_GLOW_COLS = [
 ];
 const DEMO_MELODY = [0, 2, 4, 7, 4, 2, 0, 4, 5, 4, 2, 0];
 
-function createFloorPianoController(creation, group) {
+function createFloorPianoController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1125,8 +1241,9 @@ function createFloorPianoController(creation, group) {
   let lastWalkKey = -1;
   let riffStep = -1;
   let riffTimer = 0;
+  let melodyProgress = 0;
 
-  function strikeKey(idx, withSound = true) {
+  function strikeKey(idx, withSound = true, manual = false) {
     if (idx < 0 || idx >= 8) return;
     const k = keys[idx];
     k.press = 1.0;
@@ -1140,6 +1257,19 @@ function createFloorPianoController(creation, group) {
     nm.position.set(k.kx, baseY + 0.28, 0);
     root.add(nm);
     floatingNotes.push({ mesh: nm, life: 0.85, phase: idx });
+
+    if (manual && withSound) {
+      if (idx === DEMO_MELODY[melodyProgress]) {
+        melodyProgress++;
+        if (melodyProgress >= DEMO_MELODY.length) {
+          melodyProgress = 0;
+          claimMilestone("floor_piano", "melody", "Played the full voxel melody");
+          onEvent?.("Floor Piano — You played the full melody! 🎶");
+        }
+      } else {
+        melodyProgress = idx === DEMO_MELODY[0] ? 1 : 0;
+      }
+    }
   }
 
   return {
@@ -1158,7 +1288,7 @@ function createFloorPianoController(creation, group) {
         return "Floor Piano — Playing voxel melody!";
       }
       if (typeof action?.key === "number") {
-        strikeKey(action.key, true);
+        strikeKey(action.key, true, true);
       }
       return null;
     },
@@ -1186,7 +1316,7 @@ function createFloorPianoController(creation, group) {
           if (kIdx !== lastWalkKey) {
             lastWalkKey = kIdx;
             ensureAudio();
-            strikeKey(kIdx, true);
+            strikeKey(kIdx, true, true);
           }
         } else {
           lastWalkKey = -1;
@@ -1236,7 +1366,7 @@ const SIMON_PADS = [
   { pos: [0.42, 0.42], idle: "#23687a", lit: "#4ce8e0", freq: 659.25 },
 ];
 
-function createSimonSynthController(creation, group) {
+function createSimonSynthController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1280,6 +1410,7 @@ function createSimonSynthController(creation, group) {
   let userStep = 0;
   let playbackIdx = -1;
   let playbackTimer = 0;
+  let nextRoundDelay = 0;
 
   function rebuildSpire(level) {
     while (spireGroup.children.length) spireGroup.remove(spireGroup.children[0]);
@@ -1323,8 +1454,11 @@ function createSimonSynthController(creation, group) {
         userStep++;
         if (userStep >= sequence.length) {
           const completed = sequence.length;
-          nextRound();
-          return completed >= 3 ? `Simon Memory — Level ${completed} cleared!` : null;
+          const improved = recordBest("simon_synth", "level", completed);
+          recordLastResult("simon_synth", { score: completed, label: `Cleared Simon level ${completed}` });
+          claimMilestone("simon_synth", `level_${completed}`, `Cleared Simon level ${completed}`);
+          nextRoundDelay = 0.9;
+          return `Simon Memory — Level ${completed} cleared!${improved ? " · New best!" : ""}`;
         }
         return null;
       } else {
@@ -1332,10 +1466,15 @@ function createSimonSynthController(creation, group) {
         sequence = [];
         rebuildSpire(0);
         playArpeggio([220, 164.81], 0.12, 0.26, "sawtooth", 0.065);
-        return `Simon Memory — Missed! Reached level ${reached}. Click to play again`;
+        const best = getBest("simon_synth", "level");
+        return `Simon Memory — Missed! Reached level ${reached}. Best: ${best} · Click to play again`;
       }
     },
     step(dt) {
+      if (nextRoundDelay > 0) {
+        nextRoundDelay -= dt;
+        if (nextRoundDelay <= 0) nextRound();
+      }
       if (playbackIdx >= 0) {
         playbackTimer -= dt;
         if (playbackTimer <= 0) {
@@ -1366,7 +1505,7 @@ function createSimonSynthController(creation, group) {
 }
 
 // ─── 6. Lights-Out 3x3 Bioluminescent Rune Cube Puzzle ───────────────────────
-function createLightsOutController(creation, group) {
+function createLightsOutController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1442,9 +1581,12 @@ function createLightsOutController(creation, group) {
     }
   }
 
+  let moveCount = 0;
+
   function scrambleSolvable() {
     state.fill(true);
     solved = false;
+    moveCount = 0;
     capstone.visible = false;
     // Apply 4 distinct moves from solved state -> guaranteed solvable in <= 4 clicks!
     const picks = [0, 1, 2, 3, 4, 5, 6, 7, 8].sort(() => Math.random() - 0.5).slice(0, 4);
@@ -1469,14 +1611,18 @@ function createLightsOutController(creation, group) {
       const idx = typeof action?.rune === "number" ? action.rune : -1;
       if (idx < 0 || idx >= 9) return null;
       toggleAt(idx);
+      moveCount++;
       syncRunes();
       const litCount = state.filter(Boolean).length;
       playTone(330 + litCount * 55, 0.14, "sine", 0.075);
       if (litCount === 9) {
         solved = true;
         capstone.visible = true;
+        const improved = recordLowest("lights_out", "moves", moveCount);
+        recordLastResult("lights_out", { score: moveCount, label: `Solved all 9 runes in ${moveCount} moves` });
+        claimMilestone("lights_out", `solved_${moveCount}`, `Solved Rune Shrine in ${moveCount} moves`);
         playArpeggio([523.25, 659.25, 783.99, 1046.5, 1318.5], 0.075, 0.28, "triangle", 0.085);
-        return "Rune Shrine — All 9 bioluminescent runes ignited!";
+        return `Rune Shrine — All 9 runes ignited in ${moveCount} moves!${improved ? " · New best!" : ` · Best: ${getLowest("lights_out", "moves")}`}`;
       }
       return null;
     },
@@ -1500,7 +1646,7 @@ function createLightsOutController(creation, group) {
 const SEQ_NOTES = [196.0, 293.66, 392.0, 587.33]; // G3, D4, G4, D5 pentatonic
 const SEQ_COLS = ["#ff5a4f", "#ffb642", "#5ef28c", "#4ce8e0"];
 
-function createStepSequencerController(creation, group) {
+function createStepSequencerController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1574,6 +1720,7 @@ function createStepSequencerController(creation, group) {
   let playingAudio = false;
   let stepAccum = 0;
   let curStep = 0;
+  let editCount = 0;
 
   return {
     kind: "step_sequencer",
@@ -1586,10 +1733,15 @@ function createStepSequencerController(creation, group) {
       playingAudio = true;
       if (typeof action?.row === "number" && typeof action?.step === "number") {
         const { row, step } = action;
-        pattern[row][step] = !pattern[row][step];
-        cells[row][step].geometry = pattern[row][step] ? rowGeos[row] : offGeo;
-        if (pattern[row][step]) {
-          playTone(SEQ_NOTES[row], 0.14, "triangle", 0.075);
+        if (row >= 0 && row < 4 && step >= 0 && step < 8) {
+          pattern[row][step] = !pattern[row][step];
+          cells[row][step].geometry = pattern[row][step] ? rowGeos[row] : offGeo;
+          editCount++;
+          if (pattern[row][step]) playTone(SEQ_NOTES[row], 0.14, "triangle", 0.075);
+          if (editCount === 8) {
+            claimMilestone("step_sequencer", "remix_8", "Remixed the 8-step groove");
+            return "Step Sequencer — 8 edits! Your remix is underway 🎛️";
+          }
         }
         return wasSilent ? "Step Sequencer — Live synth loop unmuted!" : null;
       }
@@ -1623,7 +1775,7 @@ function createStepSequencerController(creation, group) {
 }
 
 // ─── 8. Interactive Streetball Trick-Shot Hoop ───────────────────────────────
-function createBasketballController(creation, group) {
+function createBasketballController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1640,6 +1792,26 @@ function createBasketballController(creation, group) {
   const rimMesh = buildVoxelMesh(rimVox, { scale: 0.075, depthLayer: 4 });
   rimMesh.position.copy(rimPos);
   root.add(rimMesh);
+
+  // Timing meter: click when the marker is in the green zone for a swish.
+  const meterGroup = new THREE.Group();
+  meterGroup.position.set(rimPos.x, rimPos.y + 0.78, rimPos.z);
+  root.add(meterGroup);
+  const meterBar = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.1, 0.08),
+    new THREE.MeshBasicMaterial({ color: "#23252b", transparent: true, opacity: 0.85 }),
+  );
+  meterGroup.add(meterBar);
+  const sweetZone = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.13, 0.1),
+    new THREE.MeshBasicMaterial({ color: "#5ef28c", transparent: true, opacity: 0.9 }),
+  );
+  meterGroup.add(sweetZone);
+  const meterMarker = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.2, 0.12),
+    new THREE.MeshBasicMaterial({ color: "#ffe055" }),
+  );
+  meterGroup.add(meterMarker);
 
   const ballVox = new Vox(1153);
   ballVox.sphere(0, 0, 0, 2.4, 2.4, 2.4, "#ec8438", 0.45);
@@ -1676,12 +1848,17 @@ function createBasketballController(creation, group) {
   const scoreGroup = new THREE.Group();
   root.add(scoreGroup);
   let totalPoints = 0;
+  let meterPhase = 0;
 
   function launchShot(spotIdx) {
     const sp = shotSpots[spotIdx] || shotSpots[0];
     const start = new THREE.Vector3(sp.x, 0.35, sp.z);
-    const swish = Math.random() < (sp.pts === 2 ? 0.82 : 0.72);
-    const target = rimPos.clone().add(new THREE.Vector3(swish ? 0 : (Math.random() > 0.5 ? 0.22 : -0.22), 0.06, 0));
+    const accuracy = Math.max(0, 1 - Math.abs(meterPhase - 0.5) * 2.6);
+    const swish = accuracy >= 0.58;
+    const missSide = meterPhase < 0.5 ? -1 : 1;
+    const target = rimPos.clone().add(
+      new THREE.Vector3(swish ? 0 : missSide * (0.14 + (1 - accuracy) * 0.4), 0.06, 0),
+    );
     const flightT = sp.pts === 3 ? 1.02 : 0.86;
     const g = 11.8;
     const vx = (target.x - start.x) / flightT;
@@ -1692,7 +1869,10 @@ function createBasketballController(creation, group) {
     m.position.copy(start);
     root.add(m);
     playTone(310, 0.09, "triangle", 0.07);
-    activeShots.push({ mesh: m, vx, vy, vz, g, age: 0, flightT, swish, pts: sp.pts, resolved: false });
+    activeShots.push({
+      mesh: m, vx, vy, vz, g, age: 0, flightT, swish, accuracy,
+      pts: sp.pts, resolved: false,
+    });
   }
 
   return {
@@ -1717,6 +1897,8 @@ function createBasketballController(creation, group) {
         bm.position.y = 0.22 + Math.abs(Math.sin(t * 3.4 + idx)) * 0.14;
         bm.rotation.x = t * 2.0;
       });
+      meterPhase = (meterPhase + dt * 0.82) % 1;
+      meterMarker.position.x = -0.62 + meterPhase * 1.24;
       for (let i = activeShots.length - 1; i >= 0; i--) {
         const s = activeShots[i];
         s.age += dt;
@@ -1730,6 +1912,12 @@ function createBasketballController(creation, group) {
           s.resolved = true;
           if (s.swish) {
             totalPoints += s.pts;
+            recordBest("basketball_hoop", "points", totalPoints);
+            recordLastResult("basketball_hoop", { score: totalPoints, label: `${totalPoints} trick-shot points` });
+            if (s.accuracy > 0.94) {
+              claimMilestone("basketball_hoop", "perfect_swish", "Hit a perfect swish");
+              onEvent?.("Streetball — Perfect swish! 🎯");
+            }
             s.vx *= 0.15;
             s.vz *= 0.15;
             rimMesh.scale.set(1.06, 0.86, 1.06);
@@ -1762,13 +1950,17 @@ function createBasketballController(creation, group) {
     dispose() {
       rimMesh.geometry.dispose();
       ballProto.geometry.dispose();
+      [meterBar, sweetZone, meterMarker].forEach((m) => {
+        m.geometry.dispose();
+        m.material.dispose();
+      });
       hitMeshes.forEach((m) => m.geometry.dispose());
     },
   };
 }
 
 // ─── 9. Mechanical 3-Reel Voxel Jackpot Automaton ────────────────────────────
-function createSlotMachineController(creation, group) {
+function createSlotMachineController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1882,7 +2074,13 @@ function createSlotMachineController(creation, group) {
       if (!stillSpinning && pendingOutcome) {
         const [a, bSym, c] = pendingOutcome;
         pendingOutcome = null;
-        const burstCount = a === bSym && bSym === c ? 18 : a === bSym || bSym === c || a === c ? 7 : 0;
+        const jackpot = a === bSym && bSym === c;
+        const burstCount = jackpot ? 18 : a === bSym || bSym === c || a === c ? 7 : 0;
+        if (jackpot) {
+          const first = awardAchievement("slot_machine:jackpot", "Lucky three-of-a-kind");
+          if (first) onEvent?.("Jackpot Automaton — Three matching symbols! 🍒");
+          recordBest("slot_machine", "jackpots", 1);
+        }
         if (burstCount > 0) {
           playArpeggio(
             burstCount >= 18 ? [523.25, 659.25, 783.99, 1046.5, 1318.5] : [523.25, 659.25, 783.99],
@@ -1941,7 +2139,7 @@ const FW_PALETTES = [
   ["#5ef28c", "#9b7bd4"],
 ];
 
-function createFireworksController(creation, group) {
+function createFireworksController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -1965,7 +2163,24 @@ function createFireworksController(creation, group) {
 
   const shells = [];
   const particles = [];
-  let idleSalvoTimer = 9.0 + (creation.id.charCodeAt(3) % 7);
+  const particlePool = [];
+  const MAX_ACTIVE_PARTICLES = 180;
+  let idleSalvoTimer = 9.0 + (String(creation.id).charCodeAt(3) % 7 || 3);
+  let salvoCooldown = 0;
+  let salvoCount = 0;
+
+  function acquireParticle(geometryIndex) {
+    const mesh = particlePool.pop() || new THREE.Mesh(sparkGeos[geometryIndex], sparkMat);
+    mesh.geometry = sparkGeos[geometryIndex];
+    mesh.visible = true;
+    if (!mesh.parent) root.add(mesh);
+    return mesh;
+  }
+
+  function releaseParticle(mesh) {
+    mesh.visible = false;
+    particlePool.push(mesh);
+  }
 
   function launchSalvo(count = 3, withAudio = true) {
     for (let i = 0; i < count; i++) {
@@ -1996,14 +2211,25 @@ function createFireworksController(creation, group) {
     setHovered() {},
     onInspectFocus() {
       ensureAudio();
-      launchSalvo(3, true);
+      if (salvoCooldown <= 0) {
+        launchSalvo(3, true);
+        salvoCooldown = 0.9;
+      }
     },
     trigger() {
       ensureAudio();
+      if (salvoCooldown > 0) return null;
       launchSalvo(3, true);
+      salvoCooldown = 0.9;
+      salvoCount++;
+      if (salvoCount === 5) {
+        claimMilestone("fireworks_mortar", "show_5", "Launched a five-salvo firework show");
+        return "Fireworks Mortar — Five-salvo sky show! ✨";
+      }
       return "Fireworks Mortar — Salvo launched!";
     },
     step(dt) {
+      salvoCooldown = Math.max(0, salvoCooldown - dt);
       idleSalvoTimer -= dt;
       if (idleSalvoTimer <= 0) {
         launchSalvo(1, false);
@@ -2030,14 +2256,13 @@ function createFireworksController(creation, group) {
             playBurstNoise(0.22, 0.065);
             playArpeggio([783.99, 1046.5], 0.06, 0.2, "triangle", 0.045);
           }
-          for (let k = 0; k < 28; k++) {
+          for (let k = 0; k < 28 && particles.length < MAX_ACTIVE_PARTICLES; k++) {
             const theta = Math.random() * Math.PI * 2;
             const phi = Math.acos(2 * Math.random() - 1);
             const spd = 4.2 + Math.random() * 3.4;
             const gIdx = sh.palIdx * 2 + (k % 2);
-            const pm = new THREE.Mesh(sparkGeos[gIdx], sparkMat);
+            const pm = acquireParticle(gIdx);
             pm.position.copy(origin);
-            root.add(pm);
             particles.push({
               mesh: pm,
               vx: Math.sin(phi) * Math.cos(theta) * spd,
@@ -2053,7 +2278,7 @@ function createFireworksController(creation, group) {
         const p = particles[i];
         p.life -= dt;
         if (p.life <= 0) {
-          root.remove(p.mesh);
+          releaseParticle(p.mesh);
           particles.splice(i, 1);
           continue;
         }
@@ -2068,13 +2293,14 @@ function createFireworksController(creation, group) {
     },
     dispose() {
       sparkGeos.forEach((g) => g.dispose());
+      particlePool.forEach((m) => root.remove(m));
       hb.geometry.dispose();
     },
   };
 }
 
 // ─── 11. High-Voltage 3D Voxel Tesla Lightning Coil ──────────────────────────
-function createTeslaCoilController(creation, group) {
+function createTeslaCoilController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -2119,6 +2345,8 @@ function createTeslaCoilController(creation, group) {
 
   let energizedSec = 1.5;
   let flickerAccum = 0;
+  let zapCooldown = 0;
+  let zapCount = 0;
 
   return {
     kind: "tesla_coil",
@@ -2133,12 +2361,20 @@ function createTeslaCoilController(creation, group) {
     },
     trigger() {
       ensureAudio();
+      if (zapCooldown > 0) return null;
       energizedSec = 5.5;
+      zapCooldown = 0.6;
+      zapCount++;
       playBurstNoise(0.2, 0.055);
       playArpeggio([146.83, 293.66, 587.33], 0.04, 0.26, "sawtooth", 0.05);
+      if (zapCount === 5) {
+        claimMilestone("tesla_coil", "charged_5", "Charged the Tesla coil five times");
+        return "Tesla Coil — Five-charge lightning storm! ⚡";
+      }
       return "Tesla Coil — 500,000V voxel arc discharge!";
     },
     step(dt, t) {
+      zapCooldown = Math.max(0, zapCooldown - dt);
       if (energizedSec > 0) {
         energizedSec -= dt;
         flickerAccum += dt;
@@ -2169,7 +2405,7 @@ function createTeslaCoilController(creation, group) {
 }
 
 // ─── 12. Anti-Gravity 180° Levitating Inverter ───────────────────────────────
-function createGravityInverterController(creation, group) {
+function createGravityInverterController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -2196,9 +2432,9 @@ function createGravityInverterController(creation, group) {
     extraRadius: 0,
     setHovered() {},
     onInspectFocus() {
+      // Inspecting must never flip the creation; only an explicit click does.
       ensureAudio();
-      inverted = !inverted;
-      playArpeggio(inverted ? [261.63, 392, 523.25, 783.99] : [783.99, 523.25, 392, 261.63], 0.06, 0.2, "sine", 0.065);
+      playTone(392, 0.12, "sine", 0.045);
     },
     trigger() {
       ensureAudio();
@@ -2231,7 +2467,7 @@ function createGravityInverterController(creation, group) {
 }
 
 // ─── 13. Musical Helical 3D Voxel Marble Run Cascade ─────────────────────────
-function createMarbleRunController(creation, group) {
+function createMarbleRunController(creation, group, onEvent) {
   const root = new THREE.Group();
   group.add(root);
 
@@ -2253,6 +2489,8 @@ function createMarbleRunController(creation, group) {
   const marbles = [];
   const chimeNotes = [523.25, 587.33, 659.25, 783.99, 880, 1046.5];
   let autoTimer = 6.0;
+  let cascadeCooldown = 0;
+  let cascadeCount = 0;
 
   function dropCascade(count = 5, withAudio = true) {
     for (let i = 0; i < count; i++) {
@@ -2277,14 +2515,25 @@ function createMarbleRunController(creation, group) {
     setHovered() {},
     onInspectFocus() {
       ensureAudio();
-      dropCascade(5, true);
+      if (cascadeCooldown <= 0) {
+        dropCascade(5, true);
+        cascadeCooldown = 1.0;
+      }
     },
     trigger() {
       ensureAudio();
+      if (cascadeCooldown > 0) return null;
       dropCascade(6, true);
+      cascadeCooldown = 1.0;
+      cascadeCount++;
+      if (cascadeCount === 3) {
+        claimMilestone("marble_run", "cascade_3", "Started three marble cascades");
+        return "Marble Run — Triple cascade! 🌀";
+      }
       return "Marble Run — Cascading glowing voxel marbles!";
     },
     step(dt) {
+      cascadeCooldown = Math.max(0, cascadeCooldown - dt);
       autoTimer -= dt;
       if (autoTimer <= 0 && marbles.length === 0) {
         dropCascade(2, false);
@@ -2326,37 +2575,67 @@ function createMarbleRunController(creation, group) {
 }
 
 // ─── Factory Dispatcher ──────────────────────────────────────────────────────
+function withAudioSource(controller, creation) {
+  if (!controller) return null;
+  const source = {
+    x: Number(creation?.x) || 0,
+    z: Number(creation?.z) || 0,
+  };
+  const wrapped = { ...controller };
+  for (const method of ["trigger", "step", "setHovered", "onInspectFocus", "dispose"]) {
+    if (typeof controller[method] !== "function") continue;
+    wrapped[method] = (...args) =>
+      withGameAudioSource(source, () => controller[method](...args));
+  }
+  return wrapped;
+}
+
 export function createInteractiveController(creation, group, onEvent = null) {
   const kind = creation?.blueprint?.interaction?.kind;
   if (!kind) return null;
+  let controller = null;
   switch (kind) {
     case "tic_tac_toe":
-      return createTicTacToeController(creation, group, onEvent);
+      controller = createTicTacToeController(creation, group, onEvent);
+      break;
     case "connect_four":
-      return createConnectFourController(creation, group, onEvent);
+      controller = createConnectFourController(creation, group, onEvent);
+      break;
     case "whack_a_mole":
-      return createWhackAMoleController(creation, group);
+      controller = createWhackAMoleController(creation, group, onEvent);
+      break;
     case "floor_piano":
-      return createFloorPianoController(creation, group);
+      controller = createFloorPianoController(creation, group, onEvent);
+      break;
     case "simon_synth":
-      return createSimonSynthController(creation, group);
+      controller = createSimonSynthController(creation, group, onEvent);
+      break;
     case "lights_out":
-      return createLightsOutController(creation, group);
+      controller = createLightsOutController(creation, group, onEvent);
+      break;
     case "step_sequencer":
-      return createStepSequencerController(creation, group);
+      controller = createStepSequencerController(creation, group, onEvent);
+      break;
     case "basketball_hoop":
-      return createBasketballController(creation, group);
+      controller = createBasketballController(creation, group, onEvent);
+      break;
     case "slot_machine":
-      return createSlotMachineController(creation, group);
+      controller = createSlotMachineController(creation, group, onEvent);
+      break;
     case "fireworks_mortar":
-      return createFireworksController(creation, group);
+      controller = createFireworksController(creation, group, onEvent);
+      break;
     case "tesla_coil":
-      return createTeslaCoilController(creation, group);
+      controller = createTeslaCoilController(creation, group, onEvent);
+      break;
     case "gravity_inverter":
-      return createGravityInverterController(creation, group);
+      controller = createGravityInverterController(creation, group, onEvent);
+      break;
     case "marble_run":
-      return createMarbleRunController(creation, group);
+      controller = createMarbleRunController(creation, group, onEvent);
+      break;
     default:
       return null;
   }
+  return withAudioSource(controller, creation);
 }

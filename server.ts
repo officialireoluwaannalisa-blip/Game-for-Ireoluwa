@@ -43,6 +43,114 @@ type NodeUpgradeSocket = {
   destroy(): void;
 };
 
+const gameEventBuckets = new Map<string, { windowStart: number; count: number }>();
+const racePositionBuckets = new Map<string, { windowStart: number; count: number }>();
+const gameLeaderboards = new Map<string, Array<{ name: string; score: number; at: number }>>();
+const recentGameEvents: Array<Record<string, unknown>> = [];
+const GAME_EVENT_GAME_IDS = new Set([
+  "car_drive",
+  "subway_runner",
+  "balloon_pop",
+  "tic_tac_toe",
+  "connect_four",
+]);
+const BOARD_GAME_IDS = new Set(["tic_tac_toe", "connect_four"]);
+
+function allowGameEvent(ipHash: string, buckets = gameEventBuckets, limit = 30): boolean {
+  const now = Date.now();
+  if (buckets.size > 1024) {
+    for (const [key, bucket] of buckets.entries()) {
+      if (now - bucket.windowStart > 60_000) buckets.delete(key);
+    }
+  }
+  const current = buckets.get(ipHash);
+  if (!current || now - current.windowStart > 60_000) {
+    buckets.set(ipHash, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (current.count >= limit) return false;
+  current.count++;
+  return true;
+}
+
+// Race ghosts are published five times a second, so they use their own generous
+// bucket instead of consuming the 30/min board-game event allowance.
+function allowRacePositionEvent(ipHash: string): boolean {
+  return allowGameEvent(ipHash, racePositionBuckets, 360);
+}
+
+type SanitizedGameEvent =
+  | { kind: "score"; game: string; score: number; name: string }
+  | { kind: "challenge"; game: string; matchId: string; clientId: string; name: string }
+  | { kind: "move"; game: string; move: number; matchId: string; clientId: string; name: string }
+  | {
+      kind: "position";
+      game: string;
+      x: number;
+      z: number;
+      yaw: number;
+      lap: number;
+      rank: number;
+      clientId: string;
+      name: string;
+    };
+
+function sanitizeGameScoreEvent(raw: Record<string, unknown>, name: string) {
+  const game = String(raw.game || "");
+  const score = Number(raw.score);
+  if (!GAME_EVENT_GAME_IDS.has(game) || !Number.isFinite(score) || score < 0) return null;
+  return {
+    kind: "score" as const,
+    game,
+    score: Math.min(1_000_000, Math.round(score)),
+    name: name || "Explorer",
+  };
+}
+
+function sanitizeGameChallengeEvent(raw: Record<string, unknown>, name: string) {
+  const game = String(raw.game || "");
+  if (!BOARD_GAME_IDS.has(game)) return null;
+  return {
+    kind: "challenge" as const,
+    game,
+    matchId: sanitizePlainText(raw.matchId, 32, true),
+    clientId: sanitizePlainText(raw.clientId, 48, true),
+    name: name || "Explorer",
+  };
+}
+
+function sanitizeGameMoveEvent(raw: Record<string, unknown>, name: string) {
+  const game = String(raw.game || "");
+  const move = Number(raw.move);
+  if (!BOARD_GAME_IDS.has(game) || !Number.isInteger(move) || move < -1 || move > 6) return null;
+  return {
+    kind: "move" as const,
+    game,
+    move,
+    matchId: sanitizePlainText(raw.matchId, 32, true),
+    clientId: sanitizePlainText(raw.clientId, 48, true),
+    name: name || "Explorer",
+  };
+}
+
+function sanitizeGamePositionEvent(raw: Record<string, unknown>, name: string) {
+  if (String(raw.game || "") !== "car_drive") return null;
+  const x = Number(raw.x);
+  const z = Number(raw.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return {
+    kind: "position" as const,
+    game: "car_drive",
+    x: Math.max(-1000, Math.min(1000, x)),
+    z: Math.max(-1000, Math.min(1000, z)),
+    yaw: Math.max(-Math.PI * 2, Math.min(Math.PI * 2, Number(raw.yaw) || 0)),
+    lap: Math.max(1, Math.min(3, Math.trunc(Number(raw.lap) || 1))),
+    rank: Math.max(1, Math.min(4, Math.trunc(Number(raw.rank) || 4))),
+    clientId: sanitizePlainText(raw.clientId, 48, true),
+    name: name || "Explorer",
+  };
+}
+
 const minigameBuckets = new Map<string, { windowStart: number; count: number }>();
 function allowMinigameMove(ipHash: string): boolean {
   const now = Date.now();
@@ -343,6 +451,72 @@ export async function startServer(customPort?: number) {
           reason,
         });
         return jsonResponse(request, result, result.ok ? 200 : 404);
+      }
+
+      if (url.pathname === "/api/game-events") {
+        if (request.method === "GET") {
+          return jsonResponse(
+            request,
+            {
+              ok: true,
+              recentEvents: recentGameEvents.slice(-8).reverse(),
+              leaderboards: Object.fromEntries(gameLeaderboards.entries()),
+            },
+            200,
+          );
+        }
+        if (request.method !== "POST") {
+          return jsonResponse(request, { ok: false, error: "Method not allowed." }, 405);
+        }
+        const csrfErr = verifyMutationSecurity(request);
+        if (csrfErr) {
+          return jsonResponse(request, { ok: false, error: csrfErr }, 403);
+        }
+        const id = await resolveVisitorIdentity(request, env);
+        const parsedBody = await readBoundedJsonBody(request, 4_096);
+        if (!parsedBody.ok) {
+          return jsonResponse(request, { ok: false, error: parsedBody.error }, parsedBody.status);
+        }
+        const raw = parsedBody.data;
+        const kind = String(raw.kind || "");
+        const allowed =
+          kind === "position" ? allowRacePositionEvent(id.ipHash) : allowGameEvent(id.ipHash);
+        if (!allowed) {
+          return jsonResponse(request, { ok: false, error: "Too many game events." }, 429);
+        }
+        const name = sanitizePlainText(raw.name, 16, true) || "Explorer";
+        let event: SanitizedGameEvent | null = null;
+        if (kind === "score") event = sanitizeGameScoreEvent(raw, name);
+        else if (kind === "challenge") event = sanitizeGameChallengeEvent(raw, name);
+        else if (kind === "move") event = sanitizeGameMoveEvent(raw, name);
+        else if (kind === "position") event = sanitizeGamePositionEvent(raw, name);
+        if (!event) {
+          return jsonResponse(request, { ok: false, error: "Invalid game event." }, 400);
+        }
+
+        if (event.kind === "score") {
+          const rows = gameLeaderboards.get(event.game) || [];
+          const next = [
+            ...rows.filter((row) => row.name !== event.name),
+            { name: event.name, score: event.score, at: Date.now() },
+          ]
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
+          gameLeaderboards.set(event.game, next);
+        }
+
+        const payload: Record<string, unknown> = { type: "game_event", ...event, at: Date.now() };
+        recentGameEvents.push(payload);
+        if (recentGameEvents.length > 24) recentGameEvents.shift();
+        mpHub.broadcastWorldEvent(payload);
+        return jsonResponse(
+          request,
+          {
+            ok: true,
+            leaderboard: event.kind === "score" ? gameLeaderboards.get(event.game) || [] : [],
+          },
+          200,
+        );
       }
 
       if (url.pathname === "/api/minigame-move") {

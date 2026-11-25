@@ -1,6 +1,8 @@
 // GeminIsland Kids Mode — Safe Filtering, 3D World Highlights, Explorer Dock & Age-5 Learning Labs
 // Subjects: Maths, English, Quantitative Reasoning, Qualitative Reasoning, plus Games & Fun.
 
+import { awardAchievement } from "./game_progress.js";
+
 const KIDS_MODE_STORAGE_KEY = "geminisland_kids_mode_v1";
 const KIDS_STARS_STORAGE_KEY = "geminisland_kids_stars_v1";
 const KIDS_SPEECH_STORAGE_KEY = "geminisland_kids_speech_v1";
@@ -1599,6 +1601,7 @@ export function createKidsModeController({
 
   function awardStar(starId, reason = "Great job! You earned a Star!") {
     const key = typeof starId === "string" && starId ? starId : `arcade_${Date.now()}`;
+    awardAchievement(key, reason);
     if (!solvedIds.has(key)) {
       solvedIds.add(key);
       saveSolvedIds();

@@ -8,43 +8,31 @@
 import * as THREE from "three";
 import { Vox, buildVoxelMesh } from "./vox.js";
 
-// ─── Procedural Arcade Sound Synth ───────────────────────────────────────────
-let arcadeAudioCtx = null;
+// ─── Shared Arcade Sound Synth (master mute/volume + spatial falloff) ────────
+import {
+  ensureGameAudio,
+  playGameSweep,
+  playGameTone,
+} from "./game_audio.js";
+import {
+  claimMilestone,
+  getBest,
+  recordBest,
+} from "../game_progress.js";
+import {
+  bufferInput,
+  consumeInput,
+  decayInput,
+  raceRank,
+  unwrapAngle,
+} from "./game_rules.js";
 
 function ensureArcadeAudio() {
-  if (typeof window === "undefined") return null;
-  const Ctor = window.AudioContext || window.webkitAudioContext;
-  if (!Ctor) return null;
-  try {
-    if (!arcadeAudioCtx) arcadeAudioCtx = new Ctor();
-    if (arcadeAudioCtx.state === "suspended") {
-      arcadeAudioCtx.resume().catch(() => {});
-    }
-    return arcadeAudioCtx;
-  } catch {
-    return null;
-  }
+  return ensureGameAudio();
 }
 
 function playArcadeTone(freq = 440, dur = 0.14, type = "triangle", gainPeak = 0.08, delay = 0) {
-  const ctx = ensureArcadeAudio();
-  if (!ctx || ctx.state !== "running") return;
-  try {
-    const t0 = ctx.currentTime + delay;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(Math.max(40, freq), t0);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(gainPeak, t0 + 0.012);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(g);
-    g.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.02);
-  } catch {
-    // Ignore audio context edge errors
-  }
+  playGameTone(freq, dur, type, gainPeak, delay);
 }
 
 function playCoinSound(combo = 0) {
@@ -81,25 +69,7 @@ function playCountdownBeep(isGo = false) {
 }
 
 function playJumpSound() {
-  const ctx = ensureArcadeAudio();
-  if (!ctx || ctx.state !== "running") return;
-  try {
-    const t0 = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(280, t0);
-    osc.frequency.exponentialRampToValueAtTime(620, t0 + 0.15);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.075, t0 + 0.015);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.17);
-    osc.connect(g);
-    g.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + 0.19);
-  } catch {
-    // Ignore
-  }
+  playGameSweep(280, 620, 0.17, "sine", 0.075);
 }
 
 function playSlideSound() {
@@ -169,10 +139,7 @@ function wrapAngle02Pi(a) {
 }
 
 function wrapAngleDiff(to, from) {
-  let d = (to - from) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
+  return unwrapAngle(from, to);
 }
 
 function buildRibbonMesh(segments, innerOffset, outerOffset, yLevel, colorFn, receiveShadow = true) {
@@ -695,8 +662,10 @@ export function createKidsArcadeSystem({
     up: false,
     down: false,
   };
-  let jumpQueued = false;
-  let slideQueued = false;
+  let jumpQueued = 0; // buffered seconds, so inputs just before landing still fire
+  let slideQueued = 0;
+  let racePublishTimer = 0;
+  const remoteRacerMarkers = new Map();
 
   const camPos = new THREE.Vector3();
   const camLook = new THREE.Vector3();
@@ -867,6 +836,13 @@ export function createKidsArcadeSystem({
     spawnTimer: 0,
     gameOver: false,
     starsEarned: 0,
+    combo: 0,
+    bestCombo: 0,
+    nearMisses: 0,
+    nearMilestone5: false,
+    nearMilestone15: false,
+    milestone500: false,
+    milestone1000: false,
   };
 
   // ── 3. Sky Balloon Pop State ───────────────────────────────────────────────
@@ -885,6 +861,7 @@ export function createKidsArcadeSystem({
   const confettiGroup = new THREE.Group();
   balloonGroup.add(confettiGroup);
   const confettiBurst = [];
+  const confettiMaterials = new Map();
   const confettiGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
 
   const balloonState = {
@@ -894,6 +871,10 @@ export function createKidsArcadeSystem({
     totalPopped: 0,
     starsEarned: 0,
     combo: 0,
+    bestStreak: 0,
+    missions: 0,
+    roundSec: 45,
+    gameOver: false,
   };
 
   function ordinal(n) {
@@ -922,7 +903,8 @@ export function createKidsArcadeSystem({
       onHudChange?.({
         mode: "car_drive",
         title: "Island Grand Prix",
-        scoreLabel: `${medal} ${ordinal(rank)}/4 · Lap ${Math.min(TOTAL_LAPS, carState.lap)}/${TOTAL_LAPS} · ★ ${carState.score}`,
+        scoreValue: carState.score,
+        scoreLabel: `${medal} ${ordinal(rank)}/4 · Lap ${Math.min(TOTAL_LAPS, carState.lap)}/${TOTAL_LAPS} · ★ ${carState.score} · Best ${getBest("car_drive", "stars")}`,
         subLabel: carState.raceFinished
           ? `Finished ${ordinal(rank)} place with ${carState.score} stars!`
           : carState.boostTimer > 0
@@ -939,10 +921,12 @@ export function createKidsArcadeSystem({
     } else if (activeMode === "subway_runner") {
       const heartsText = "❤️".repeat(Math.max(0, runnerState.hearts)) + "🤍".repeat(Math.max(0, 3 - runnerState.hearts));
       const surfTag = runnerState.surfTimer > 0 ? " · 🏄 SURF!" : "";
+      const comboTag = runnerState.combo > 2 ? ` · 🔥 ×${runnerState.combo} combo` : "";
       onHudChange?.({
         mode: "subway_runner",
         title: "Island Surfer",
-        scoreLabel: `Coins: ${runnerState.coins} · ${heartsText}${surfTag}`,
+        scoreValue: runnerState.coins,
+        scoreLabel: `Coins ${runnerState.coins} · ${Math.round(runnerState.dist)}m · ${heartsText} · 💨 ${runnerState.nearMisses} near misses${surfTag}${comboTag} · Best ${getBest("subway_runner", "coins")}`,
         subLabel: runnerState.gameOver
           ? `Great surf run! Collected ${runnerState.coins} coins!`
           : runnerState.surfTimer > 0
@@ -950,15 +934,21 @@ export function createKidsArcadeSystem({
             : "Dodge trains, jump hurdles & grab 🏄 surfboards!",
         gameOver: runnerState.gameOver,
         finishBadge: "🏄 Great Run!",
-        finishText: `You surfed ${Math.round(runnerState.dist)}m across the island and collected ${runnerState.coins} coins!`,
+        finishText: `You surfed ${Math.round(runnerState.dist)}m with ${runnerState.coins} coins and ${runnerState.nearMisses} near misses!`,
       });
     } else if (activeMode === "balloon_pop") {
       onHudChange?.({
         mode: "balloon_pop",
         title: "Sky Balloon Pop",
-        scoreLabel: `Pop ${balloonState.targetColor.toUpperCase()}: ${balloonState.hits} / ${balloonState.targetCount}`,
-        subLabel: `Tap the ${balloonState.targetColor} balloons floating over the plaza!`,
+        scoreValue: balloonState.missions,
+        scoreLabel: `Pop ${balloonState.targetColor.toUpperCase()}: ${balloonState.hits}/${balloonState.targetCount} · ${Math.max(0, Math.ceil(balloonState.roundSec))}s · Best ${getBest("balloon_pop", "missions")}`,
+        subLabel: balloonState.gameOver
+          ? `Round complete! ${balloonState.missions} missions cleared.`
+          : `Tap ${balloonState.targetColor} balloons · Streak ×${Math.max(1, balloonState.combo)}`,
         targetColor: balloonState.targetColor,
+        gameOver: balloonState.gameOver,
+        finishBadge: "🎈 Balloon Round Complete!",
+        finishText: `You cleared ${balloonState.missions} colour missions with a best streak of ${balloonState.bestStreak}!`,
       });
     }
   }
@@ -1014,7 +1004,10 @@ export function createKidsArcadeSystem({
       const af = getTrackFrame(gs.th);
       ai.theta = gs.th;
       ai.lap = 1;
-      ai.totalProgress = idx === 2 ? 0.0 : gs.th - Math.PI * 2;
+      // Keep AI progress in the same unwrapped coordinate space as the player.
+      // Previously two cars were placed a whole lap behind, so the announced P4
+      // start immediately became P2 on the first standings update.
+      ai.totalProgress = carState.totalProgress + wrapAngleDiff(gs.th, gridSpots[0].th);
       ai.laneOffset = ai.spec.laneOff;
       ai.speedRate = ai.spec.baseRate;
       ai.wheelSpin = 0;
@@ -1137,8 +1130,15 @@ export function createKidsArcadeSystem({
     runnerState.spawnTimer = 0.75;
     runnerState.gameOver = false;
     runnerState.starsEarned = 0;
-    jumpQueued = false;
-    slideQueued = false;
+    runnerState.combo = 0;
+    runnerState.bestCombo = 0;
+    runnerState.nearMisses = 0;
+    runnerState.nearMilestone5 = false;
+    runnerState.nearMilestone15 = false;
+    runnerState.milestone500 = false;
+    runnerState.milestone1000 = false;
+    jumpQueued = 0;
+    slideQueued = 0;
 
     for (let i = 0; i < TRACK_SEG_COUNT; i++) {
       trackSegs[i].position.set(RUNNER_ORIGIN_X, RUNNER_ORIGIN_Y, -i * TRACK_SEG_LEN + 8);
@@ -1181,9 +1181,13 @@ export function createKidsArcadeSystem({
   }
 
   function pickNextBalloonMission() {
-    const idx = Math.floor(Math.random() * BALLOON_COLORS.length);
+    const previous = balloonState.targetColor;
+    let idx = Math.floor(Math.random() * BALLOON_COLORS.length);
+    for (let attempt = 0; attempt < 4 && BALLOON_COLORS[idx].name === previous; attempt++) {
+      idx = Math.floor(Math.random() * BALLOON_COLORS.length);
+    }
     balloonState.targetColor = BALLOON_COLORS[idx].name;
-    balloonState.targetCount = 4;
+    balloonState.targetCount = 4 + Math.min(4, Math.floor(balloonState.missions / 2));
     balloonState.hits = 0;
   }
 
@@ -1204,6 +1208,10 @@ export function createKidsArcadeSystem({
     balloonState.totalPopped = 0;
     balloonState.starsEarned = 0;
     balloonState.combo = 0;
+    balloonState.bestStreak = 0;
+    balloonState.missions = 0;
+    balloonState.roundSec = 45;
+    balloonState.gameOver = false;
     pickNextBalloonMission();
 
     for (let i = 0; i < 14; i++) {
@@ -1232,8 +1240,8 @@ export function createKidsArcadeSystem({
     clearRunnerEntities();
     clearBalloons();
     inputs.left = inputs.right = inputs.up = inputs.down = false;
-    jumpQueued = false;
-    slideQueued = false;
+    jumpQueued = 0;
+    slideQueued = 0;
     localAvatarRig.root.scale.setScalar(1);
     onHudChange?.(null);
     onExit?.();
@@ -1257,12 +1265,12 @@ export function createKidsArcadeSystem({
 
   function triggerRunnerJump() {
     if (activeMode !== "subway_runner" || runnerState.gameOver) return;
-    jumpQueued = true;
+    jumpQueued = bufferInput();
   }
 
   function triggerRunnerSlide() {
     if (activeMode !== "subway_runner" || runnerState.gameOver) return;
-    slideQueued = true;
+    slideQueued = bufferInput();
   }
 
   function triggerHonk() {
@@ -1279,7 +1287,7 @@ export function createKidsArcadeSystem({
   }
 
   function handlePointerTap(ndcX, ndcY) {
-    if (activeMode !== "balloon_pop") return false;
+    if (activeMode !== "balloon_pop" || balloonState.gameOver) return false;
     balloonRaycaster.setFromCamera({ x: ndcX, y: ndcY }, fpCamera);
     const roots = balloonItems.map((b) => b.group);
     const hits = balloonRaycaster.intersectObjects(roots, true);
@@ -1293,8 +1301,12 @@ export function createKidsArcadeSystem({
     if (idx < 0) return false;
 
     const item = balloonItems[idx];
-    const cMat = new THREE.MeshBasicMaterial({ color: item.hex });
-    for (let k = 0; k < 8; k++) {
+    let cMat = confettiMaterials.get(item.hex);
+    if (!cMat) {
+      cMat = new THREE.MeshBasicMaterial({ color: item.hex });
+      confettiMaterials.set(item.hex, cMat);
+    }
+    for (let k = 0; k < 8 && confettiBurst.length < 120; k++) {
       const m = new THREE.Mesh(confettiGeo, cMat);
       m.position.copy(item.group.position);
       confettiGroup.add(m);
@@ -1315,10 +1327,14 @@ export function createKidsArcadeSystem({
       balloonState.hits++;
       balloonState.totalPopped++;
       balloonState.combo++;
+      balloonState.bestStreak = Math.max(balloonState.bestStreak, balloonState.combo);
       playBalloonPopSound(balloonState.combo);
       if (balloonState.hits >= balloonState.targetCount) {
         balloonState.starsEarned++;
-        onEarnStar?.(`balloon_${Date.now()}`);
+        balloonState.missions++;
+        recordBest("balloon_pop", "missions", balloonState.missions);
+        claimMilestone("balloon_pop", `mission_${balloonState.missions}`, `Cleared ${balloonState.missions} balloon missions`);
+        onEarnStar?.(`balloon:${balloonState.missions}`);
         playStarFanfare();
         pickNextBalloonMission();
       }
@@ -1411,6 +1427,25 @@ export function createKidsArcadeSystem({
         carState.x = nx;
         carState.z = nz;
 
+        // Share live race position so other visitors can see a ghost marker.
+        racePublishTimer -= dt;
+        if (racePublishTimer <= 0) {
+          racePublishTimer = 0.2;
+          const bus = typeof window !== "undefined" ? window.__geminIslandGameEvents : null;
+          if (bus && typeof bus.publish === "function") {
+            void bus.publish({
+              kind: "position",
+              game: "car_drive",
+              clientId: bus.clientId,
+              x: carState.x,
+              z: carState.z,
+              yaw: carState.yaw,
+              lap: carState.lap,
+              rank: carState.rank,
+            });
+          }
+        }
+
         // Lap & Rank Progress Tracking
         const finalInfo = findNearestTrackInfo(carState.x, carState.z, nextInfo.theta);
         const dTh = wrapAngleDiff(finalInfo.theta, carState.lastTheta);
@@ -1425,7 +1460,11 @@ export function createKidsArcadeSystem({
             carState.raceFinished = true;
             carState.finishRank = carState.rank;
             carState.starsEarned++;
-            onEarnStar?.(`race_win_${Date.now()}`);
+            recordBest("car_drive", "stars", carState.score);
+            if (carState.finishRank === 1) {
+              claimMilestone("car_drive", "first_win", "Won the Island Grand Prix");
+              onEarnStar?.("car:win");
+            }
             playRaceVictoryFanfare();
           } else {
             playStarFanfare();
@@ -1491,11 +1530,10 @@ export function createKidsArcadeSystem({
 
       // Compute Live Standings (1st .. 4th)
       if (!carState.raceFinished) {
-        let betterCount = 0;
-        for (const ai of aiCars) {
-          if (ai.totalProgress > carState.totalProgress) betterCount++;
-        }
-        const nextRank = 1 + betterCount;
+        const nextRank = raceRank(
+          [carState.totalProgress, ...aiCars.map((ai) => ai.totalProgress)],
+          0,
+        );
         if (nextRank !== carState.rank) {
           carState.rank = nextRank;
           hudDirty = true;
@@ -1559,7 +1597,9 @@ export function createKidsArcadeSystem({
           playCoinSound(carState.score);
           if (carState.score % 5 === 0) {
             carState.starsEarned++;
-            onEarnStar?.(`car_${carState.score}`);
+            recordBest("car_drive", "stars", carState.score);
+            claimMilestone("car_drive", `stars_${carState.score}`, `Collected ${carState.score} race stars`);
+            onEarnStar?.(`car:${carState.score}`);
             playStarFanfare();
           }
         }
@@ -1594,6 +1634,16 @@ export function createKidsArcadeSystem({
         runnerState.speed = Math.min(20.5, 12.2 + runnerState.dist * 0.012) * surfSpeedMul;
         const dz = runnerState.speed * dt;
         runnerState.dist += dz;
+        if (!runnerState.milestone500 && runnerState.dist >= 500) {
+          runnerState.milestone500 = true;
+          claimMilestone("subway_runner", "distance_500", "Surfed 500m");
+          playStarFanfare();
+        }
+        if (!runnerState.milestone1000 && runnerState.dist >= 1000) {
+          runnerState.milestone1000 = true;
+          claimMilestone("subway_runner", "distance_1000", "Surfed 1000m");
+          playRaceVictoryFanfare();
+        }
 
         if (runnerState.surfTimer > 0) {
           const hadSurf = runnerState.surfTimer > 0;
@@ -1612,21 +1662,25 @@ export function createKidsArcadeSystem({
         const targetX = RUNNER_ORIGIN_X + LANE_X[runnerState.lane];
         runnerState.x = THREE.MathUtils.damp(runnerState.x, targetX, 15, dt);
 
-        if (jumpQueued && runnerState.y <= RUNNER_ORIGIN_Y + 0.05) {
+        if (consumeInput(jumpQueued) && runnerState.y <= RUNNER_ORIGIN_Y + 0.05) {
           runnerState.vy = 11.4;
           runnerState.slideTimer = 0;
+          jumpQueued = 0;
           playJumpSound();
+        } else {
+          jumpQueued = decayInput(jumpQueued, dt);
         }
-        jumpQueued = false;
 
-        if (slideQueued) {
+        if (consumeInput(slideQueued)) {
           if (runnerState.y > RUNNER_ORIGIN_Y + 0.2 && runnerState.vy > -10) {
             runnerState.vy = -12;
           }
           runnerState.slideTimer = 0.72;
+          slideQueued = 0;
           playSlideSound();
+        } else {
+          slideQueued = decayInput(slideQueued, dt);
         }
-        slideQueued = false;
 
         if (runnerState.slideTimer > 0) {
           runnerState.slideTimer = Math.max(0, runnerState.slideTimer - dt);
@@ -1667,10 +1721,15 @@ export function createKidsArcadeSystem({
             c.collected = true;
             c.mesh.visible = false;
             runnerState.coins++;
-            playCoinSound(runnerState.coins);
+            runnerState.combo++;
+            runnerState.bestCombo = Math.max(runnerState.bestCombo, runnerState.combo);
+            playCoinSound(runnerState.combo);
+            recordBest("subway_runner", "coins", runnerState.coins);
+            recordBest("subway_runner", "distance", Math.round(runnerState.dist));
             if (runnerState.coins % 5 === 0) {
               runnerState.starsEarned++;
-              onEarnStar?.(`runner_${runnerState.coins}`);
+              claimMilestone("subway_runner", `coins_${runnerState.coins}`, `Collected ${runnerState.coins} surf coins`);
+              onEarnStar?.(`runner:${runnerState.coins}`);
             }
             emitHud();
           }
@@ -1733,11 +1792,35 @@ export function createKidsArcadeSystem({
                 playBumpSound();
               } else {
                 runnerState.hearts--;
+                runnerState.combo = 0;
                 runnerState.invulnTimer = 1.4;
                 playBumpSound();
                 if (runnerState.hearts <= 0) {
                   runnerState.gameOver = true;
                 }
+              }
+              emitHud();
+            }
+          }
+
+          // Near miss: clearing a hazard by a hair (or in the next lane) earns
+          // a coin and a combo step, once per obstacle as it passes the player.
+          if (!ob.nearMissChecked && oz > ob.halfLen + 0.45) {
+            ob.nearMissChecked = true;
+            if (runnerState.invulnTimer <= 0 && Math.abs(ox - playerLaneX) < 2.8) {
+              runnerState.nearMisses++;
+              runnerState.coins++;
+              runnerState.combo++;
+              runnerState.bestCombo = Math.max(runnerState.bestCombo, runnerState.combo);
+              playCoinSound(runnerState.combo);
+              recordBest("subway_runner", "coins", runnerState.coins);
+              if (runnerState.nearMisses === 5 && !runnerState.nearMilestone5) {
+                runnerState.nearMilestone5 = true;
+                claimMilestone("subway_runner", "near_miss_5", "Five surf near-misses");
+              }
+              if (runnerState.nearMisses === 15 && !runnerState.nearMilestone15) {
+                runnerState.nearMilestone15 = true;
+                claimMilestone("subway_runner", "near_miss_15", "Fifteen surf near-misses");
               }
               emitHud();
             }
@@ -1813,6 +1896,14 @@ export function createKidsArcadeSystem({
     }
 
     if (activeMode === "balloon_pop") {
+      if (!balloonState.gameOver) {
+        balloonState.roundSec = Math.max(0, balloonState.roundSec - dt);
+        if (balloonState.roundSec <= 0) {
+          balloonState.gameOver = true;
+          playStarFanfare();
+          emitHud();
+        }
+      }
       for (let i = 0; i < balloonItems.length; i++) {
         const b = balloonItems[i];
         b.y += b.speedY * dt;
@@ -1863,9 +1954,37 @@ export function createKidsArcadeSystem({
     return false;
   }
 
+  function setRemoteRacers(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const seen = new Set();
+    for (const entry of list) {
+      const id = String(entry?.clientId || entry?.name || "remote");
+      seen.add(id);
+      let marker = remoteRacerMarkers.get(id);
+      if (!marker) {
+        marker = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 0.6, 1.5),
+          new THREE.MeshBasicMaterial({ color: "#4ce8e0", transparent: true, opacity: 0.62 }),
+        );
+        raceWorld.group.add(marker);
+        remoteRacerMarkers.set(id, marker);
+      }
+      marker.position.set(Number(entry?.x) || 0, RACE_ORIGIN_Y + 0.5, Number(entry?.z) || 0);
+      marker.rotation.y = Number(entry?.yaw) || 0;
+    }
+    for (const [id, marker] of remoteRacerMarkers) {
+      if (seen.has(id)) continue;
+      raceWorld.group.remove(marker);
+      marker.geometry.dispose();
+      marker.material.dispose();
+      remoteRacerMarkers.delete(id);
+    }
+  }
+
   return {
     isActive: () => activeMode !== null,
     getActiveMode: () => activeMode,
+    setRemoteRacers,
     startCarDrive,
     startSubwayRunner,
     startBalloonPop,

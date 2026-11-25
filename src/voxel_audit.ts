@@ -1,5 +1,6 @@
 import type {
   CreationBehavior,
+  InteractionKind,
   PathKind,
   VoxelBlueprint,
   VoxelOp,
@@ -2560,4 +2561,92 @@ export function auditAndRepairWorldSpatial(
       details,
     },
   };
+}
+
+export interface GameGeometryAudit {
+  kind: InteractionKind;
+  ok: boolean;
+  issues: string[];
+  filledCenterColumns: number;
+}
+
+const OPEN_TOP_GAME_KINDS = new Set<InteractionKind>([
+  "tic_tac_toe",
+  "whack_a_mole",
+  "floor_piano",
+  "simon_synth",
+  "lights_out",
+]);
+const FRONT_MOUNTED_GAME_KINDS = new Set<InteractionKind>([
+  "connect_four",
+  "slot_machine",
+  "step_sequencer",
+]);
+
+/**
+ * Game-specific sculpt checks. The browser mounts live 3D boards on certain
+ * decks/front faces; catching bad geometry during sculpting avoids a creation
+ * that looks fine but has an unplayable board.
+ */
+export function auditInteractiveGameGeometry(bp: VoxelBlueprint): GameGeometryAudit | null {
+  const kind = bp.interaction?.kind;
+  if (!kind) return null;
+
+  const vox = new SimVox();
+  applySimOps(vox, bp.ops, bp.palette);
+  const occupied = (x: number, y: number, z: number) => vox.v.has(`${x},${y},${z}`);
+  const issues: string[] = [];
+  let filledCenterColumns = 0;
+
+  if (OPEN_TOP_GAME_KINDS.has(kind)) {
+    let hasOverhead = false;
+    let minTop = Infinity;
+    let maxTop = 0;
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) {
+        let top = -1;
+        for (let y = 0; y <= 12; y++) {
+          if (occupied(x, y, z)) top = y + 1;
+        }
+        if (top > 0) {
+          filledCenterColumns++;
+          minTop = Math.min(minTop, top);
+          maxTop = Math.max(maxTop, top);
+        }
+        for (let y = 13; y <= 34; y++) {
+          if (occupied(x, y, z)) {
+            hasOverhead = true;
+            break;
+          }
+        }
+      }
+    }
+    if (filledCenterColumns < 28) {
+      issues.push(
+        `Only ${filledCenterColumns}/49 central columns have a deck. Build a flat open-top base spanning x/z -3..3.`,
+      );
+    }
+    if (hasOverhead) {
+      issues.push("A roof covers the play area. Leave open sky above y=12 so the live board can mount.");
+    }
+    if (filledCenterColumns >= 28 && maxTop - minTop > 3) {
+      issues.push("The central deck is too uneven. Keep the top surface within 3 voxels of height.");
+    }
+  }
+
+  if (FRONT_MOUNTED_GAME_KINDS.has(kind)) {
+    let blocked = 0;
+    for (let x = -6; x <= 6; x++) {
+      for (let y = 2; y <= 12; y++) {
+        for (let z = 4; z <= 10; z++) {
+          if (occupied(x, y, z)) blocked++;
+        }
+      }
+    }
+    if (blocked > 40) {
+      issues.push(`The +Z front face has ${blocked} voxels blocking the mounted frame. Clear z=4..10, y=2..12.`);
+    }
+  }
+
+  return { kind, ok: issues.length === 0, issues, filledCenterColumns };
 }

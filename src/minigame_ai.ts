@@ -14,11 +14,14 @@ export const DEFAULT_FLASH_LITE_MODELS = [
 
 export type MinigameAiKind = "tic_tac_toe" | "connect_four";
 
+export type MinigameDifficulty = "easy" | "normal" | "hard" | "gemini";
+
 export interface MinigameMoveRequest {
   game: MinigameAiKind;
   board?: number[];
   grid?: number[][];
   creationName?: string;
+  difficulty?: MinigameDifficulty;
 }
 
 export interface MinigameMoveResult {
@@ -30,6 +33,86 @@ export interface MinigameMoveResult {
 
 let cachedFlashLiteModel: string | null = null;
 const skipThinkingConfigModels = new Set<string>();
+
+const TTT_LOCAL_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6],
+];
+
+function tttLocalWinner(board: number[]): number {
+  for (const [a, b, c] of TTT_LOCAL_LINES) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
+  }
+  return board.every(Boolean) ? 3 : 0;
+}
+
+function localTicTacToeMove(board: number[], difficulty: MinigameDifficulty): number {
+  const legal = board.map((v, i) => (v === 0 ? i : -1)).filter((i) => i >= 0);
+  if (!legal.length) return -1;
+  if (difficulty === "easy" && Math.random() < 0.35) {
+    return legal[Math.floor(Math.random() * legal.length)];
+  }
+  const tactical = (who: number) => {
+    for (const idx of legal) {
+      board[idx] = who;
+      const won = tttLocalWinner(board) === who;
+      board[idx] = 0;
+      if (won) return idx;
+    }
+    return -1;
+  };
+  const win = tactical(2);
+  if (win >= 0) return win;
+  const block = tactical(1);
+  if (block >= 0) return block;
+  for (const preferred of [4, 0, 2, 6, 8, 1, 3, 5, 7]) {
+    if (board[preferred] === 0) return preferred;
+  }
+  return legal[0];
+}
+
+function localConnectFourMove(grid: number[][], difficulty: MinigameDifficulty): number {
+  const legal = [3, 2, 4, 1, 5, 0, 6].filter((c) => grid[c].indexOf(0) !== -1);
+  if (!legal.length) return -1;
+  if (difficulty === "easy" && Math.random() < 0.25) {
+    return legal[Math.floor(Math.random() * legal.length)];
+  }
+  const landingRow = (c: number) => grid[c].indexOf(0);
+  const createsFour = (c: number, who: number) => {
+    const r = landingRow(c);
+    if (r < 0) return false;
+    grid[c][r] = who;
+    const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    let found = false;
+    for (const [dc, dr] of dirs) {
+      let count = 1;
+      for (const sign of [1, -1]) {
+        let k = 1;
+        while (
+          c + dc * k * sign >= 0 && c + dc * k * sign < 7 &&
+          r + dr * k * sign >= 0 && r + dr * k * sign < 6 &&
+          grid[c + dc * k * sign][r + dr * k * sign] === who
+        ) {
+          count++;
+          k++;
+        }
+      }
+      if (count >= 4) found = true;
+    }
+    grid[c][r] = 0;
+    return found;
+  };
+  for (const c of legal) if (createsFour(c, 2)) return c;
+  for (const c of legal) if (createsFour(c, 1)) return c;
+  return legal[0];
+}
+
+function instantLocalMove(req: MinigameMoveRequest): number {
+  return req.game === "tic_tac_toe"
+    ? localTicTacToeMove(req.board || [], req.difficulty || "normal")
+    : localConnectFourMove(req.grid || [], req.difficulty || "normal");
+}
 
 function buildFlashLiteModelOrder(configured?: string): string[] {
   const custom = parseModelList(configured);
@@ -218,6 +301,10 @@ export function validateMinigameRequest(raw: Record<string, unknown>): {
 } {
   const game = raw.game;
   const creationName = sanitizePlainText(raw.creationName, 64);
+  const allowedDifficulties: MinigameDifficulty[] = ["easy", "normal", "hard", "gemini"];
+  const difficulty: MinigameDifficulty = allowedDifficulties.includes(raw.difficulty as MinigameDifficulty)
+    ? (raw.difficulty as MinigameDifficulty)
+    : "normal";
 
   if (game === "tic_tac_toe") {
     if (!Array.isArray(raw.board) || raw.board.length !== 9) {
@@ -238,7 +325,7 @@ export function validateMinigameRequest(raw: Record<string, unknown>): {
     }
     return {
       ok: true,
-      req: { game: "tic_tac_toe", board, creationName },
+      req: { game: "tic_tac_toe", board, creationName, difficulty },
       validMoves,
     };
   }
@@ -270,7 +357,7 @@ export function validateMinigameRequest(raw: Record<string, unknown>): {
     }
     return {
       ok: true,
-      req: { game: "connect_four", grid, creationName },
+      req: { game: "connect_four", grid, creationName, difficulty },
       validMoves,
     };
   }
@@ -285,6 +372,16 @@ export async function chooseMoveWithGeminiFlashLite(opts: {
   validMoves: number[];
 }): Promise<MinigameMoveResult> {
   const t0 = Date.now();
+  if (opts.req.difficulty && opts.req.difficulty !== "gemini") {
+    const move = instantLocalMove(opts.req);
+    const validSet = new Set(opts.validMoves);
+    return {
+      move: validSet.has(move) ? move : (opts.validMoves[0] ?? -1),
+      quip: "Nice play!",
+      modelUsed: `local-${opts.req.difficulty}`,
+      latencyMs: Math.max(1, Date.now() - t0),
+    };
+  }
   const { systemPrompt, userPrompt } =
     opts.req.game === "tic_tac_toe"
       ? formatTicTacToePrompt(opts.req.board!, opts.validMoves, opts.req.creationName)

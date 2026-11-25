@@ -8,6 +8,9 @@ const ALLOWED_STATIC_ORIGINS = new Set([
 const EXACT_CLOUD_RUN_HOST_RE =
   /^(?:[a-z0-9-]+-853813963450|ais-(?:dev|pre)-[a-z0-9-]+-73428471351)\.[a-z0-9-]+\.run\.app$/;
 
+// Arena/E2B live previews are served from https://<port>-<sandbox>.e2b.app.
+const E2B_PREVIEW_HOST_RE = /^[a-z0-9-]+\.e2b\.app$/;
+
 const SECRET_PATTERNS: RegExp[] = [
   /AIza[0-9A-Za-z_-]{16,}/g,
   /\bAQ\.[0-9A-Za-z._-]{16,}/g,
@@ -125,7 +128,8 @@ export function isAllowedAppletOrigin(origin: string): boolean {
     if (
       hostname === "ai.studio" ||
       hostname.endsWith(".ai.studio") ||
-      EXACT_CLOUD_RUN_HOST_RE.test(hostname)
+      EXACT_CLOUD_RUN_HOST_RE.test(hostname) ||
+      E2B_PREVIEW_HOST_RE.test(hostname)
     ) {
       return true;
     }
