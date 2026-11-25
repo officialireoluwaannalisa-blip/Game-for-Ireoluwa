@@ -114,6 +114,21 @@ export function safeLogWarn(
   );
 }
 
+/**
+ * Same-origin check: the browser is talking to the exact host that served the page.
+ * This is not cross-site, so it is safe — and it lets custom production domains and
+ * plain HTTP localhost dev connect without weakening the allowlist.
+ */
+function isSameOriginAsRequest(origin: string, requestUrl: string): boolean {
+  try {
+    const o = new URL(origin);
+    const r = new URL(requestUrl);
+    return o.host.toLowerCase() === r.host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 export function isAllowedAppletOrigin(origin: string): boolean {
   if (!origin || origin === "null") {
     return false;
@@ -146,7 +161,7 @@ export function isAllowedAppletOrigin(origin: string): boolean {
 export function verifyMutationSecurity(request: Request): string | null {
   const origin = request.headers.get("Origin");
   if (origin !== null) {
-    if (!isAllowedAppletOrigin(origin)) {
+    if (!isAllowedAppletOrigin(origin) && !isSameOriginAsRequest(origin, request.url)) {
       return "Invalid request origin.";
     }
   } else {
@@ -174,7 +189,7 @@ export function verifyMutationSecurity(request: Request): string | null {
 export function verifyWebSocketOrigin(request: Request): string | null {
   const origin = request.headers.get("Origin");
   if (origin !== null) {
-    if (!isAllowedAppletOrigin(origin)) {
+    if (!isAllowedAppletOrigin(origin) && !isSameOriginAsRequest(origin, request.url)) {
       return "Disallowed WebSocket Origin.";
     }
     return null;

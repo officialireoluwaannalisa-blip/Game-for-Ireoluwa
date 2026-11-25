@@ -315,6 +315,22 @@ export async function startServer(customPort?: number) {
     const url = new URL(request.url);
 
     try {
+      if (url.pathname === "/api/health") {
+        return jsonResponse(
+          request,
+          {
+            ok: true,
+            status: "healthy",
+            uptimeSec: Math.round(process.uptime()),
+            version: process.env.npm_package_version || "1.0.0",
+            creations: worldStore.getWorldSnapshot("", "").creations.length,
+            now: new Date().toISOString(),
+          },
+          200,
+          { "cache-control": "no-store" },
+        );
+      }
+
       if (url.pathname === "/api/mp") {
         if (request.method !== "POST") {
           return jsonResponse(request, { ok: false, error: "Method not allowed." }, 405);

@@ -166,6 +166,17 @@
 
       <button
         type="button"
+        id="learn-launch-btn"
+        class="cam-recenter-btn cam-learn-btn"
+        aria-label="Open the Learning Academy"
+        title="Learning Academy — learn while you play"
+      >
+        <span aria-hidden="true">🧠</span>
+        <span>Learn</span>
+      </button>
+
+      <button
+        type="button"
         id="audio-mute-btn"
         class="cam-recenter-btn cam-audio-btn"
         aria-label="Mute game audio"
@@ -409,7 +420,10 @@
           <h2>Play on IREOLUWA</h2>
           <p>Pick a game to launch, or travel to a playable creation on the island.</p>
         </div>
-        <button type="button" id="games-close-btn" class="games-close-btn" aria-label="Close games menu">✕</button>
+        <div class="games-head-actions">
+          <button type="button" id="games-open-learn-btn" class="games-learn-btn">🧠 Learning Academy</button>
+          <button type="button" id="games-close-btn" class="games-close-btn" aria-label="Close games menu">✕</button>
+        </div>
       </div>
       <div class="games-toolbar">
         <label class="games-toolbar-field">

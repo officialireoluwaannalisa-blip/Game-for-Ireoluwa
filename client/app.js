@@ -2,6 +2,7 @@ import { createMeadowWorldEngine } from "./voxel/meadow_engine.js";
 import { createCharacterBuilderController } from "./character_builder.js";
 import { createMultiplayerClient } from "./multiplayer_client.js";
 import { createKidsModeController, filterWorldForKidsMode } from "./kids_mode.js";
+import { createLearningAcademy } from "./learning_academy.js";
 import {
   ALL_GAMES,
   ARCADE_GAMES,
@@ -113,6 +114,8 @@ const arcadeCarLevelBtns = arcadeCarLevelsEl
   : [];
 
 const gamesLaunchBtn = document.getElementById("games-launch-btn");
+const learnLaunchBtn = document.getElementById("learn-launch-btn");
+const gamesOpenLearnBtn = document.getElementById("games-open-learn-btn");
 const gamesDialog = document.getElementById("games-dialog");
 const gamesCloseBtn = document.getElementById("games-close-btn");
 const gamesListEl = document.getElementById("games-list");
@@ -665,6 +668,42 @@ if (!isOgCapture) {
   });
   window.__geminIslandKidsMode = kidsMode;
 }
+
+const learningAcademy = createLearningAcademy({
+  onReward(starId, reason) {
+    const awarded = kidsMode?.awardStar?.(starId, reason);
+    if (!awarded) showToast(`★ ${reason}`, 3400);
+  },
+  onToast(message) {
+    showToast(message, 3800);
+  },
+  speak(text) {
+    if (kidsMode?.isEnabled?.() && typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(String(text || ""));
+        utter.rate = 0.95;
+        utter.pitch = 1.08;
+        window.speechSynthesis.speak(utter);
+      } catch {
+        // speech synthesis is best-effort
+      }
+    }
+  },
+});
+window.__geminIslandLearning = learningAcademy;
+
+learnLaunchBtn?.addEventListener("click", () => {
+  learningAcademy.open();
+  learnLaunchBtn.blur();
+});
+
+gamesOpenLearnBtn?.addEventListener("click", () => {
+  if (typeof gamesDialog?.close === "function") gamesDialog.close();
+  else if (gamesDialog) gamesDialog.hidden = true;
+  learningAcademy.open();
+  gamesOpenLearnBtn.blur();
+});
 
 arcadeExitBtn?.addEventListener("click", () => {
   engine?.stopArcadeGame?.();
@@ -1838,6 +1877,7 @@ async function initWorld() {
     console.warn("Live world unavailable; loading built-in island snapshot.", err);
   }
   if (!loadedLive && !rawWorldData) {
+    showToast("Live server not reachable — playing on the built-in IREOLUWA island.", 4600);
     try {
       await applyStaticSnapshot();
     } catch (snapshotErr) {

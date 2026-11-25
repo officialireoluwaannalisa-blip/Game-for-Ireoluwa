@@ -1,7 +1,6 @@
 import nodeCrypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import url from "node:url";
 import {
@@ -296,10 +295,13 @@ export class WorldStore {
   }) {
     this.envGetter = opts.getEnv;
     this.onBroadcast = opts.onBroadcast;
+    // Durable default: ./data/world-state.json (gitignored). Override with WORLD_STATE_PATH.
+    // Falls back to tmpdir only when /data cannot be resolved (e.g. read-only cwd).
+    const defaultPersist = path.join(process.cwd(), "data", "world-state.json");
     this.persistPath =
       opts.persistPath ||
       opts.getEnv().WORLD_STATE_PATH ||
-      path.join(os.tmpdir(), "geminisland-aistudio-world-v1.json");
+      defaultPersist;
 
     this.initFromSeedAndDisk();
   }

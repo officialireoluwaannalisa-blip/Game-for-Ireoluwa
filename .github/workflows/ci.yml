@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify world snapshot asset
+        run: |
+          test -f dist/world-snapshot.json || (echo "world-snapshot.json missing from build output" && exit 1)
+          node -e "const d=require('./dist/world-snapshot.json'); if(!Array.isArray(d.creations)||d.creations.length===0){throw new Error('snapshot empty')} if(typeof d.contributionCount!=='number'||d.contributionCount<=0){throw new Error('contributionCount invalid')} console.log('snapshot ok:', d.creations.length, 'creations,', d.contributionCount, 'contributions');"
