@@ -382,7 +382,7 @@ function createContributorSignboard(maxAniso = 4) {
     ctx.font = "800 30px -apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("GEMINISLAND", 256, 66);
+    ctx.fillText("IREOLUWA", 256, 66);
 
     ctx.fillStyle = "#18211b";
     ctx.font = "800 104px -apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
@@ -554,11 +554,63 @@ const SKY_BANNER_GLYPHS = {
     "######.",
     "#####..",
   ],
+  R: [
+    "######.",
+    "#######",
+    "##...##",
+    "##...##",
+    "######.",
+    "#####..",
+    "##.##..",
+    "##..##.",
+    "##..##.",
+    "##...##",
+    "##...##",
+  ],
+  O: [
+    ".#####.",
+    "#######",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "#######",
+    ".#####.",
+  ],
+  U: [
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "##...##",
+    "#######",
+    ".#####.",
+  ],
+  W: [
+    "##.....##",
+    "##.....##",
+    "##.....##",
+    "##.....##",
+    "##.....##",
+    "##..#..##",
+    "##.###.##",
+    "#########",
+    "####.####",
+    "###...###",
+    "##.....##",
+  ],
 };
 
 function createFloatingSkyBanner() {
   const group = new THREE.Group();
-  const text = "GEMINISLAND";
+  const text = "IREOLUWA";
   const voxScale = 0.56;
   const letterGapCols = 2.1;
 
@@ -3885,7 +3937,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       z: CITY_SIGN_POS[1],
       data: {
         id: "__city_sign__",
-        name: "GeminIsland Sign",
+        name: "IREOLUWA Sign",
         description: `Timber town signboard displaying ${n} ${n === 1 ? "contribution" : "contributions"} (${total} total builds on the island).`,
         behavior: {
           statusLine: `${n} ${n === 1 ? "contribution" : "contributions"} · ${total} creations`,

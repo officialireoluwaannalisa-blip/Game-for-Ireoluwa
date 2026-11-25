@@ -124,25 +124,25 @@ const POLICY_GROUPS: readonly PolicyRuleGroup[] = [
   {
     category: "anti_ai_or_datacentre",
     reason:
-      "GeminIsland is a welcoming, peaceful creative meadow — protests, activist demonstrations, and anti-AI, anti-Google, or anti-datacentre builds aren't permitted. Try adding a cozy building, creature, vehicle, or landmark instead!",
+      "IREOLUWA is a welcoming, peaceful creative meadow — protests, activist demonstrations, and anti-AI, anti-Google, or anti-datacentre builds aren't permitted. Try adding a cozy building, creature, vehicle, or landmark instead!",
     patterns: ANTI_AI_GOOGLE_DATACENTRE_PATTERNS,
   },
   {
     category: "specific_tech_company",
     reason:
-      "Let's keep GeminIsland brand-free — builds referencing specific real-world technology companies, tech brands, or tech executives aren't permitted. Try an original fictional shop, workshop, or invention instead!",
+      "Let's keep IREOLUWA brand-free — builds referencing specific real-world technology companies, tech brands, or tech executives aren't permitted. Try an original fictional shop, workshop, or invention instead!",
     patterns: SPECIFIC_TECH_COMPANY_PATTERNS,
   },
   {
     category: "political_or_patriotic",
     reason:
-      "Let's keep GeminIsland free of politics and nationalism — political figures, rallies, parliaments, geopolitical themes, and national flags aren't permitted. Try something imaginative or whimsical for the town!",
+      "Let's keep IREOLUWA free of politics and nationalism — political figures, rallies, parliaments, geopolitical themes, and national flags aren't permitted. Try something imaginative or whimsical for the town!",
     patterns: POLITICAL_OR_PATRIOTIC_PATTERNS,
   },
   {
     category: "inflammatory_or_offensive",
     reason:
-      "Let's keep GeminIsland welcoming, kind, and family-friendly — inflammatory, crude, violent, or potentially offensive builds aren't permitted. Please try creating something wholesome!",
+      "Let's keep IREOLUWA welcoming, kind, and family-friendly — inflammatory, crude, violent, or potentially offensive builds aren't permitted. Please try creating something wholesome!",
     patterns: INFLAMMATORY_OR_OFFENSIVE_PATTERNS,
   },
 ];
@@ -175,7 +175,7 @@ export function checkIslandContentPolicy(rawText: string | null | undefined): Co
       allowed: false,
       category: "specific_tech_company",
       reason:
-        "Let's keep GeminIsland brand-free — builds referencing specific real-world technology companies, tech brands, or tech executives aren't permitted. Try an original fictional vehicle or workshop instead!",
+        "Let's keep IREOLUWA brand-free — builds referencing specific real-world technology companies, tech brands, or tech executives aren't permitted. Try an original fictional vehicle or workshop instead!",
     };
   }
 

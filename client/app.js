@@ -1270,7 +1270,7 @@ function handleWorldMessage(msg) {
       msg.creation.id !== myCreationId &&
       uiState !== "building"
     ) {
-      showToast(`Someone added "${msg.creation.name}" to GeminIsland!`, 4200);
+      showToast(`Someone added "${msg.creation.name}" to IREOLUWA!`, 4200);
     }
   }
 }
