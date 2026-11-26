@@ -47,6 +47,8 @@ import {
   stepVehicleTurnaround,
   stepWorldVehiclePhysicsPass,
 } from "./vehicle_physics.js";
+import { ISLANDS, buildIslandGroup } from "./islands.js";
+import { canBuildAtIsland, isIslandOwned, getIslandDisplayName } from "../island_deeds.js";
 
 const CITY_SIGN_POS = [3.8, -10.8];
 const CITY_SIGN_YAW = 0.62;
@@ -77,7 +79,7 @@ export function getIslandCliffFactor(theta) {
  * `> 0` is on the flat buildable island plateau (`y = 0`); `0` is the coastal crest;
  * `< 0` slopes down through sandy beaches & terraced coastal cliffs into the ocean.
  */
-export function getIslandInlandMargin(x, z) {
+function getMainIslandMargin(x, z) {
   const ax = Math.abs(x) / ISLAND_HALF_EXTENT;
   const az = Math.abs(z) / ISLAND_HALF_EXTENT;
   const superDist =
@@ -89,26 +91,83 @@ export function getIslandInlandMargin(x, z) {
   return ISLAND_HALF_EXTENT + getIslandCoastWarp(theta) - superDist;
 }
 
-export function clampPointToIsland(x, z, minInlandMargin = 3.0) {
-  if (getIslandInlandMargin(x, z) >= minInlandMargin) return [x, z];
-  const r = Math.hypot(x, z);
-  if (r < 0.001) return [0, 0];
+// Outer-shoals purchasable islands reuse the same coastal warp, scaled to the
+// island size so small isles keep organic (not circular) shorelines.
+export function getOuterIslandMargin(island, x, z) {
+  const dx = x - island.x;
+  const dz = z - island.z;
+  const d = Math.hypot(dx, dz);
+  const theta = Math.atan2(dz, dx);
+  const sizeScale = island.radius / ISLAND_HALF_EXTENT;
+  const warp = getIslandCoastWarp(theta * 2.6 + island.index * 1.93) * sizeScale * 1.6;
+  return island.radius + warp - d;
+}
+
+/** Which island dominates [x, z]? `island: null` means the main island. */
+export function getIslandMarginInfo(x, z) {
+  const main = getMainIslandMargin(x, z);
+  let bestMargin = main;
+  let bestIsland = null;
+  for (const island of ISLANDS) {
+    const m = getOuterIslandMargin(island, x, z);
+    if (m > bestMargin) {
+      bestMargin = m;
+      bestIsland = island;
+    }
+  }
+  return { margin: bestMargin, island: bestIsland };
+}
+
+export function getIslandInlandMargin(x, z) {
+  return getIslandMarginInfo(x, z).margin;
+}
+
+function marginForIsland(island, x, z) {
+  return island ? getOuterIslandMargin(island, x, z) : getMainIslandMargin(x, z);
+}
+
+function clampTowardIslandCenter(x, z, minInlandMargin, island) {
+  const cx = island ? island.x : 0;
+  const cz = island ? island.z : 0;
+  const dx = x - cx;
+  const dz = z - cz;
+  const r = Math.hypot(dx, dz);
+  if (r < 0.001) return [cx, cz];
   let lo = 0;
   let hi = 1;
   for (let i = 0; i < 12; i++) {
     const mid = (lo + hi) * 0.5;
-    if (getIslandInlandMargin(x * mid, z * mid) >= minInlandMargin) {
+    if (marginForIsland(island, cx + dx * mid, cz + dz * mid) >= minInlandMargin) {
       lo = mid;
     } else {
       hi = mid;
     }
   }
-  return [x * lo, z * lo];
+  return [cx + dx * lo, cz + dz * lo];
+}
+
+export function clampPointToIsland(x, z, minInlandMargin = 3.0) {
+  const info = getIslandMarginInfo(x, z);
+  if (info.margin >= minInlandMargin) return [x, z];
+  return clampTowardIslandCenter(x, z, minInlandMargin, info.island);
+}
+
+/** Clamp toward one specific island (null = the main island), ignoring the union. */
+export function clampPointToSingleIsland(x, z, minInlandMargin = 3.0, island = null) {
+  if (marginForIsland(island, x, z) >= minInlandMargin) return [x, z];
+  return clampTowardIslandCenter(x, z, minInlandMargin, island);
 }
 
 export function getIslandGroundHeight(x, z) {
-  const m = getIslandInlandMargin(x, z);
+  const info = getIslandMarginInfo(x, z);
+  const m = info.margin;
   if (m >= 0) return 0;
+  if (info.island) {
+    const out = -m;
+    const span = info.island.radius * 0.62 + 6.5;
+    const t = Math.min(1, Math.max(0, out / span));
+    return -4.4 * Math.pow(t, 1.35);
+  }
   const theta = Math.atan2(z, x);
   const cliff = getIslandCliffFactor(theta);
   const out = -m; // meters beyond plateau crest
@@ -3347,6 +3406,30 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
   citySignboard.group.matrixAutoUpdate = false;
   scene.add(citySignboard.group);
 
+  // ── The Outer Shoals: 20 purchasable islands ───────────────────────────
+  // Each is an empty terraced-voxel mound with a deed signpost. Players buy a
+  // deed from the Island Deeds office (Stripe) to unlock building there.
+  const islandRecords = [];
+  {
+    for (const island of ISLANDS) {
+      const record = buildIslandGroup(island, {
+        owned: isIslandOwned(island.id),
+        displayName: getIslandDisplayName(island),
+      });
+      record.group.traverse((obj) => {
+        obj.matrixAutoUpdate = false;
+        obj.updateMatrixWorld?.(true);
+      });
+      scene.add(record.group);
+      islandRecords.push(record);
+    }
+  }
+  function refreshIslandDeeds() {
+    for (const record of islandRecords) {
+      record.redraw(isIslandOwned(record.island.id), getIslandDisplayName(record.island));
+    }
+  }
+
   const floatingSkyBanner = createFloatingSkyBanner();
   scene.add(floatingSkyBanner.group);
 
@@ -3734,10 +3817,17 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
     cam.goalEl = cam.el;
   }
 
+  // The camera and the player are anchored to one island at a time: main
+  // island by default, or whichever Outer Shoals island was teleported to.
+  const activeBounds = { id: null, island: null, x: 0, z: 0, panBound: 185 };
   const CLAMP_BOUND = 185;
   function clampTarget() {
-    cam.goalTx = Math.max(-CLAMP_BOUND, Math.min(CLAMP_BOUND, cam.goalTx));
-    cam.goalTz = Math.max(-CLAMP_BOUND, Math.min(CLAMP_BOUND, cam.goalTz));
+    const lo = activeBounds.x - activeBounds.panBound;
+    const hi = activeBounds.x + activeBounds.panBound;
+    cam.goalTx = Math.max(lo, Math.min(hi, cam.goalTx));
+    const loZ = activeBounds.z - activeBounds.panBound;
+    const hiZ = activeBounds.z + activeBounds.panBound;
+    cam.goalTz = Math.max(loZ, Math.min(hiZ, cam.goalTz));
   }
 
   function isClientSpotClear(x, z, candidateRadius = previewPlotRadius) {
@@ -3945,6 +4035,71 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       return [tmpHit.x, tmpHit.z];
     }
     return null;
+  }
+
+  function getIslandRecord(islandId) {
+    return islandRecords.find((rec) => rec.island.id === islandId) || null;
+  }
+
+  function anchorToIsland(island) {
+    if (island) {
+      activeBounds.id = island.id;
+      activeBounds.island = island;
+      activeBounds.x = island.x;
+      activeBounds.z = island.z;
+      activeBounds.panBound = Math.max(34, island.radius * 2.1);
+    } else {
+      activeBounds.id = null;
+      activeBounds.island = null;
+      activeBounds.x = 0;
+      activeBounds.z = 0;
+      activeBounds.panBound = CLAMP_BOUND;
+    }
+  }
+
+  function placeLocalAvatarAt(x, z, yaw) {
+    fp.x = x;
+    fp.z = z;
+    fp.feetY = getIslandGroundHeight(x, z);
+    fp.y = fp.feetY + FP_EYE_HEIGHT;
+    fp.vx = 0;
+    fp.vz = 0;
+    fp.jumpY = 0;
+    fp.jumpVy = 0;
+    fp.yaw = fp.goalYaw = yaw;
+    fp.pitch = fp.goalPitch = -0.02;
+    cam.tx = x;
+    cam.tz = z;
+    cam.goalTx = x;
+    cam.goalTz = z;
+    cam.ty = 0;
+    cam.goalTy = 0;
+    skyDome.position.set(fp.x, 0, fp.z);
+    fpCamera.position.set(fp.x, fp.y, fp.z);
+  }
+
+  /** Teleport the player (and orbit camera target) to an Outer Shoals island. */
+  function teleportToIslandId(islandId) {
+    const island = ISLANDS.find((isl) => isl.id === islandId);
+    if (!island) return false;
+    anchorToIsland(island);
+    // Arrive facing the main-island silhouette across the water.
+    const yaw = Math.atan2(island.x, island.z);
+    placeLocalAvatarAt(island.x, island.z, yaw);
+    if (!fp.active) {
+      setDragMode("walk");
+    }
+    callbacks.onIslandChange?.(island);
+    return true;
+  }
+
+  /** Return to the main IREOLUWA island (signboard square). */
+  function teleportHomeIsland() {
+    anchorToIsland(null);
+    const yaw = Math.atan2(-(2.4 - 10.6), -(-18.5 - -0.6));
+    placeLocalAvatarAt(10.6, -0.6, yaw);
+    callbacks.onIslandChange?.(null);
+    return true;
   }
 
   function getCitySignHoverItem() {
@@ -5106,7 +5261,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
           pushOut(sc.x, sc.z, sc.isCoastalRock ? 0.85 : 0.52);
         }
       }
-      [x, z] = clampPointToIsland(x, z, -5.0);
+      [x, z] = clampPointToSingleIsland(x, z, -5.0, activeBounds.island ?? null);
     }
     return [x, z];
   }
@@ -6024,8 +6179,8 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
     syncComposerCamera(camera);
 
     if (!toHome) {
-      const aheadX = Math.max(-CLAMP_BOUND, Math.min(CLAMP_BOUND, fp.x - Math.sin(fp.yaw) * 6.5));
-      const aheadZ = Math.max(-CLAMP_BOUND, Math.min(CLAMP_BOUND, fp.z - Math.cos(fp.yaw) * 6.5));
+      const aheadX = Math.max(activeBounds.x - activeBounds.panBound, Math.min(activeBounds.x + activeBounds.panBound, fp.x - Math.sin(fp.yaw) * 6.5));
+      const aheadZ = Math.max(activeBounds.z - activeBounds.panBound, Math.min(activeBounds.z + activeBounds.panBound, fp.z - Math.cos(fp.yaw) * 6.5));
       lastExitCamTarget = { x: aheadX, z: aheadZ };
       cam.tx = cam.goalTx = aheadX;
       cam.tz = cam.goalTz = aheadZ;
@@ -6645,6 +6800,11 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
         if (!pickedExisting) {
           const g = screenToGround(e.clientX, e.clientY);
           if (g) {
+            const gate = canBuildAtIsland(g[0], g[1]);
+            if (!gate.ok) {
+              callbacks.onBuildLocked?.(gate.island);
+              return;
+            }
             const [sx, sz] = snapToClearMeadowSpot(g[0], g[1], previewPlotRadius);
             spotState.x = sx;
             spotState.z = sz;
@@ -8058,6 +8218,9 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
     arcadeControl,
     setSpotPickerState,
     setPreviewPrompt,
+    teleportToIslandId,
+    teleportHomeIsland,
+    refreshIslandDeeds,
     focusCreationById,
     focusOn,
     setCameraPose,

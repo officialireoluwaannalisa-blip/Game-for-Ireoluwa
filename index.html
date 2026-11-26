@@ -306,6 +306,9 @@
       <button type="button" id="add-btn" class="dock-pill dock-pill-add">
         + Add
       </button>
+      <button type="button" id="island-deeds-btn" class="dock-pill dock-pill-deeds" aria-label="Open the Island Deeds office — buy Outer Shoals islands">
+        🏝️ Deeds
+      </button>
 
       <!-- 2. Spot-picking prompt pill -->
       <div id="pick-spot-pill" class="dock-pill dock-pill-pick" hidden>
@@ -465,6 +468,54 @@
         <span id="games-leaderboard" class="games-leaderboard">Play a game to start your local leaderboard.</span>
         <button type="button" id="games-reset-btn" class="games-reset-btn">Reset game progress</button>
       </div>
+    </dialog>
+
+    <!-- You are standing on an Outer Shoals island -->
+    <div id="island-location-pill" class="island-location-pill" hidden>
+      <span id="island-location-name">Outer Shoals</span>
+      <button type="button" id="island-return-btn">← Back to IREOLUWA</button>
+    </div>
+
+    <!-- Island Deeds: the Outer Shoals marketplace -->
+    <dialog id="island-deeds-dialog" class="island-deeds-dialog" closedby="any" aria-label="Island Deeds — buy your own island">
+      <div class="island-deeds-head">
+        <div>
+          <h2>🏝️ Island Deeds — The Outer Shoals</h2>
+          <p>Twenty empty islands circle IREOLUWA. Buy a deed, claim the name, then build anything you like — the same builder you already know, now on your own island. Bigger islands cost more. Ten islands are named; the rest are Unnamed Isles waiting for your naming.</p>
+        </div>
+        <div class="games-head-actions">
+          <button type="button" id="island-deeds-close-btn" class="games-close-btn" aria-label="Close island deeds">✕</button>
+        </div>
+      </div>
+      <div id="island-deeds-status" class="island-deeds-status" data-state="closed">
+        <span><span class="island-deeds-dot"></span><span id="island-deeds-status-text">Checking the deed office…</span></span>
+        <span id="island-deeds-owned-count">0 of 20 deeds owned</span>
+      </div>
+      <div id="island-deeds-grid" class="island-deeds-grid"></div>
+      <div class="island-deeds-footer">
+        <span>💳 Secure checkout by Stripe · deeds are signed and portable · yours to keep forever.</span>
+        <div class="island-restore-row">
+          <input id="island-restore-input" type="text" maxlength="4000" placeholder="Paste a deed code to restore your islands" aria-label="Restore deed code" />
+          <button type="button" id="island-restore-btn">Restore</button>
+          <button type="button" id="island-export-btn">Export my deeds</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Parent gate: asked before any real-money island purchase -->
+    <dialog id="parent-gate-dialog" class="parent-gate-dialog" closedby="any" aria-label="Ask a grown-up first">
+      <h3>👨‍👩‍👧 Ask a grown-up first</h3>
+      <p>Buying an island uses real money. A grown-up can unlock this purchase: solve the sum together, then hold the green button.</p>
+      <div id="parent-gate-math" class="parent-gate-math">7 + 8 = ?</div>
+      <div class="parent-gate-row">
+        <input id="parent-gate-answer" type="number" inputmode="numeric" placeholder="Answer" aria-label="Answer to the sum" />
+      </div>
+      <button type="button" id="parent-gate-hold" class="parent-gate-hold" data-holding="0">
+        <span class="parent-gate-hold-fill"></span>
+        <span class="parent-gate-hold-label">Hold for 1.2s — Grown-up approved</span>
+      </button>
+      <p id="parent-gate-error" class="parent-gate-error" role="status"></p>
+      <button type="button" id="parent-gate-cancel" class="parent-gate-cancel">Not now</button>
     </dialog>
 
     <script type="module" src="/client/app.js"></script>

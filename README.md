@@ -61,6 +61,44 @@ snapshot and runs every game/learning feature locally. The **live server** uses:
 - `GEMINI_API_KEY` — server-side only; powers the AI builder and live board-game AI. Never shipped to the client.
 - `WORLD_STATE_PATH` — where the shared world is persisted (default `./data/world-state.json`, gitignored). **Point this at a persistent volume in production.**
 - `PORT` — listen port (default `3000`).
+- `STRIPE_SECRET_KEY` — Stripe secret key; switches the Island Deeds store to live card payments. Unset = the store renders but shows “opening at launch”.
+- `ISLAND_DEED_SECRET` — signs Island Deed tokens (HMAC-SHA256). Falls back to `STRIPE_WEBHOOK_SECRET`, then `STRIPE_SECRET_KEY`. Any random 32+ byte string works (`openssl rand -hex 32`).
+- `ISLAND_DEEDS_TEST_MODE` — `1` makes the store fulfil purchases locally with no payment (development only — **never set on production**).
+
+## Island Deeds — the Outer Shoals (20 unlockable islands)
+
+Beyond the main island lie **20 empty Outer Shoals islands** — different sizes
+(28–92 m across, ~600–3,300 m²), different biomes, and different one-time prices
+(**$1.99 → $19.99**). Ten are named; the other ten are **Unnamed Isles** that the
+buyer names at purchase. Islands start empty — owning the deed unlocks the usual
+builder on that island (and only there; the main island stays free for everyone).
+
+- **Buying** — the 🏝️ Deeds dock button opens the store. Checkout goes through
+  **Stripe Checkout** (`api/islands/checkout`); prices ALWAYS come from the shared
+  catalog (`shared/islandCatalog.mjs`), never from the client. After Stripe confirms
+  the payment, `api/islands/fulfill` mints a signed **deed token** (HMAC-SHA256);
+  the client caches it in `localStorage` and verifies cached deeds against
+  `api/islands/verify` on boot.
+- **Naming** — Unnamed Isles are named by the buyer at checkout (validated on both
+  client and server: 3–24 chars, no links, friendly-words list). Pre-named islands
+  keep their Shoals name forever; Unnamed Isles can be re-signed to a new name
+  anytime via `api/islands/rename`.
+- **Portability** — deeds are signed tokens, so they travel: “Export my deeds”
+  copies a deed code, and “Restore” on any device re-imports it. Real cross-device
+  accounts (email login) are future work.
+- **Kids Mode** — buying always passes a parent gate first (math question +
+  press-and-hold confirm) before the Stripe redirect.
+- **Enforcement** — building is gated to the main island + islands you own
+  (`canBuildAtIsland`); unowned islands show a for-sale toast and open the store.
+  As with all client-side games, the gate is client-enforced; the money side is
+  Stripe-verified.
+- **Map** — everyone sees the 20 islands (locked) as voxel mounds with deed
+  signposts; owners teleport via “Visit my island” in the store. Placement,
+  walking and camera bounds all understand the union of islands.
+- **Serverless on Vercel** — `api/islands/*` are Node serverless functions (raw
+  `(req, res)` handlers, also mounted in the Node dev server, so `npm run dev`
+  exercises the identical code path; set `ISLAND_DEEDS_TEST_MODE=1` for free local
+  test purchases).
 
 ## Deployment
 
@@ -98,9 +136,13 @@ client/
   games_catalogue.js  Single source of truth for the Play menu
   game_progress.js    Shared XP/bests/achievements store
   voxel/              Three.js engine, arcade games, in-world games, audio
+  voxel/islands.js    Procedural Outer Shoals islands + deed signposts/plaques
+  island_deeds.js     Client store for Island Deeds (checkout, verify, rename, restore)
+shared/islandCatalog.mjs  20-island catalog (single source of truth: client, dev server, serverless)
+api/islands/          Serverless: config, checkout, fulfill, verify, rename (+ _lib/deed_tokens)
 src/                  Server: world store, AI build pipeline, content policy, voxel audit
 server.ts             Node server: API, WebSocket multiplayer, static serving
-tests/                Unit tests (game rules, geometry, logic)
+tests/                Unit tests (game rules, geometry, logic, island catalog, deed tokens)
 ```
 
 ## Quality gates & CI

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import stream from "node:stream";
-import url from "node:url";
+import url, { pathToFileURL } from "node:url";
 import { createServer as createViteServer } from "vite";
 import { checkIslandContentPolicy } from "./src/content_policy";
 import { type AppEnv, resolveRuntimeEnv } from "./src/env_types";
@@ -662,6 +662,56 @@ export async function startServer(customPort?: number) {
           200,
           cookieHeaders,
         );
+      }
+
+      // ── Island Deeds API (shared implementation with /api serverless functions) ──
+      if (url.pathname.startsWith("/api/islands/")) {
+        const route = url.pathname.replace("/api/islands/", "").replace(/\/+$/, "");
+        if (!/^[a-z][a-z-]*$/.test(route)) {
+          return jsonResponse(request, { ok: false, error: "Not found." }, 404);
+        }
+        try {
+          const mod = await import(pathToFileURL(path.join(__dirname, "api", "islands", `${route}.js`)).href);
+          const handler = mod?.default;
+          if (typeof handler !== "function") {
+            return jsonResponse(request, { ok: false, error: "Not found." }, 404);
+          }
+          const rawBody =
+            request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+          let parsedBody;
+          if (rawBody) {
+            try {
+              parsedBody = JSON.parse(rawBody);
+            } catch {
+              parsedBody = undefined;
+            }
+          }
+          const synthReq = {
+            method: request.method,
+            url: `${url.pathname}${url.search}`,
+            headers: Object.fromEntries(request.headers.entries()),
+            body: parsedBody,
+          };
+          const chunks: Buffer[] = [];
+          const synthRes = {
+            statusCode: 200,
+            _headers: {} as Record<string, string>,
+            setHeader(key: string, value: string | string[]) {
+              this._headers[key.toLowerCase()] = String(value);
+            },
+            end(chunk?: unknown) {
+              if (chunk !== undefined) chunks.push(Buffer.from(String(chunk)));
+            },
+          };
+          await handler(synthReq as never, synthRes as never);
+          return new Response(Buffer.concat(chunks), {
+            status: synthRes.statusCode,
+            headers: synthRes._headers,
+          });
+        } catch (err) {
+          safeLogError("island_deeds_api", err, [env.GEMINI_API_KEY, env.CREATOR_HMAC_SECRET]);
+          return jsonResponse(request, { ok: false, error: "Island store error." }, 500);
+        }
       }
 
       return jsonResponse(request, { ok: false, error: "Not found." }, 404);

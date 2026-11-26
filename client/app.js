@@ -28,6 +28,20 @@ import {
   setGameAudioMuted,
   setGameAudioVolume,
 } from "./voxel/game_audio.js";
+import {
+  ISLANDS as SHOALS_ISLANDS,
+  fetchIslandConfig,
+  getDeeds,
+  getIslandDisplayName,
+  beginIslandPurchase,
+  fulfillPendingPurchase,
+  verifyDeedsWithServer,
+  renameOwnedIsland,
+  exportDeedBundle,
+  importDeedBundle,
+  getCatalogIsland,
+  formatPrice,
+} from "./island_deeds.js";
 
 const urlParams = new URLSearchParams(location.search);
 const isOgCapture = urlParams.get("og") === "1";
@@ -40,6 +54,26 @@ const worldCanvas = document.getElementById("world-canvas");
 const addBtn = document.getElementById("add-btn");
 const pickSpotPill = document.getElementById("pick-spot-pill");
 const cancelPickBtn = document.getElementById("cancel-pick-btn");
+const islandDeedsBtn = document.getElementById("island-deeds-btn");
+const islandDeedsDialog = document.getElementById("island-deeds-dialog");
+const islandDeedsCloseBtn = document.getElementById("island-deeds-close-btn");
+const islandDeedsGrid = document.getElementById("island-deeds-grid");
+const islandDeedsStatus = document.getElementById("island-deeds-status");
+const islandDeedsStatusText = document.getElementById("island-deeds-status-text");
+const islandDeedsOwnedCount = document.getElementById("island-deeds-owned-count");
+const islandRestoreInput = document.getElementById("island-restore-input");
+const islandRestoreBtn = document.getElementById("island-restore-btn");
+const islandExportBtn = document.getElementById("island-export-btn");
+const islandLocationPill = document.getElementById("island-location-pill");
+const islandLocationName = document.getElementById("island-location-name");
+const islandReturnBtn = document.getElementById("island-return-btn");
+const parentGateDialog = document.getElementById("parent-gate-dialog");
+const parentGateMath = document.getElementById("parent-gate-math");
+const parentGateAnswer = document.getElementById("parent-gate-answer");
+const parentGateHold = document.getElementById("parent-gate-hold");
+const parentGateHoldFill = parentGateHold?.querySelector(".parent-gate-hold-fill");
+const parentGateError = document.getElementById("parent-gate-error");
+const parentGateCancel = document.getElementById("parent-gate-cancel");
 
 const bottomBuilder = document.getElementById("bottom-builder");
 const moveSpotBtn = document.getElementById("move-spot-btn");
@@ -574,6 +608,21 @@ engine = createMeadowWorldEngine(
     },
     onArcadeExit() {
       syncArcadeHud(null);
+    },
+    onIslandChange(island) {
+      if (island) {
+        if (islandLocationName) {
+          islandLocationName.textContent = `${getIslandDisplayName(island)} — The Outer Shoals`;
+        }
+        if (islandLocationPill) islandLocationPill.hidden = false;
+      } else if (islandLocationPill) {
+        islandLocationPill.hidden = true;
+      }
+    },
+    onBuildLocked(island) {
+      const label = island?.name || "That Unnamed Isle";
+      showToast(`${label} is for sale — buy its deed to build here.`, 4200);
+      openIslandDeeds(island?.id || null);
     },
   },
   { ogMode: isOgCapture },
@@ -1900,5 +1949,318 @@ async function initWorld() {
     setInterval(refreshDailyEligibility, 10 * 60_000);
   }
 }
+
+// ─── Island Deeds — The Outer Shoals marketplace ───────────────────────────────
+const islandStore = { enabled: false, testMode: false };
+const BIOME_LABEL = {
+  meadow_clover: "Clover Meadow",
+  sandy_shore: "Beach",
+  misty_moss: "Misty Moss",
+  volcanic_basalt: "Volcanic",
+  snow_frost: "Snow & Frost",
+  stone_plaza: "Stone Plaza",
+  autumn_grove: "Autumn Grove",
+  desert_mesa: "Desert Mesa",
+};
+
+function updateIslandDeedsStatus() {
+  const owned = getDeeds().length;
+  if (islandDeedsOwnedCount) islandDeedsOwnedCount.textContent = `${owned} of 20 deeds owned`;
+  if (!islandDeedsStatus) return;
+  if (islandStore.enabled) {
+    islandDeedsStatus.dataset.state = islandStore.testMode ? "test" : "open";
+    islandDeedsStatusText.textContent = islandStore.testMode
+      ? "Deed office in TEST MODE — checkout is free local magic, no card charged"
+      : "Deed office open — secure Stripe checkout";
+  } else {
+    islandDeedsStatus.dataset.state = "closed";
+    islandDeedsStatusText.textContent = "The deed office is opening at launch — card payments not switched on yet.";
+  }
+}
+
+function renderIslandDeeds(flashId = null) {
+  if (!islandDeedsGrid) return;
+  const deeds = getDeeds();
+  const deedById = new Map(deeds.map((d) => [d.islandId, d]));
+  const cards = [];
+  for (const island of SHOALS_ISLANDS) {
+    const deed = deedById.get(island.id);
+    const owned = Boolean(deed);
+    const deedName = deed?.name || null;
+    const title = island.name || deedName || "Unnamed Isle";
+    const biome = BIOME_LABEL[island.biome] || island.biome;
+    const sizeLine = `${island.diameterMeters} m across · ${island.areaSqm.toLocaleString()} m²`;
+    const price = formatPrice(island.priceCents);
+    const ownedBlock = owned
+      ? `
+        <span class="island-owned-badge">✓ YOUR DEED</span>
+        ${
+          island.name
+            ? `<div class="island-card-meta">Name of the Shoals — permanent.</div>`
+            : `<div class="island-card-meta">You named it <strong>${escapeGameHtml(deedName || "Unnamed Isle")}</strong></div>
+               <div class="island-rename-row" style="display:flex;gap:6px;">
+                 <input class="island-name-input" data-rename-for="${island.id}" maxlength="24" value="${escapeGameHtml(deedName || "")}" aria-label="Rename island" />
+                 <button type="button" class="island-rename-btn" data-action="rename" data-island-id="${island.id}">Rename</button>
+               </div>`
+        }
+        <button type="button" class="island-visit-btn" data-action="visit" data-island-id="${island.id}">🧭 Visit my island</button>`
+      : `
+        <div class="island-card-price">${price}<small>one-time deed</small></div>
+        ${
+          island.name
+            ? ""
+            : `<input class="island-name-input" data-name-for="${island.id}" maxlength="24" placeholder="Name your island…" aria-label="Name your island" />`
+        }
+        <button type="button" class="island-buy-btn" data-action="buy" data-island-id="${island.id}">Buy — ${price}</button>`;
+    cards.push(`
+      <article class="island-card${owned ? " is-owned" : ""}${flashId === island.id ? " is-flash" : ""}" data-island-id="${island.id}">
+        <div class="island-card-top">
+          <h3 class="island-card-name">${escapeGameHtml(title)}</h3>
+          <span class="island-card-biome">${escapeGameHtml(biome)}</span>
+        </div>
+        <div class="island-card-meta">${escapeGameHtml(sizeLine)}</div>
+        <p class="island-card-blurb">${escapeGameHtml(island.blurb)}</p>
+        ${ownedBlock}
+      </article>`);
+  }
+  islandDeedsGrid.innerHTML = cards.join("");
+  updateIslandDeedsStatus();
+}
+
+async function openIslandDeeds(flashId = null) {
+  if (!islandDeedsDialog) return;
+  try {
+    const cfg = await fetchIslandConfig();
+    islandStore.enabled = cfg.enabled;
+    islandStore.testMode = cfg.testMode;
+  } catch {
+    islandStore.enabled = false;
+    islandStore.testMode = false;
+  }
+  renderIslandDeeds(flashId);
+  if (!islandDeedsDialog.open) islandDeedsDialog.showModal();
+  if (flashId) {
+    const target = islandDeedsGrid?.querySelector(`.island-card[data-island-id="${flashId}"]`);
+    target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+async function requestIslandPurchase(island, customName) {
+  const result = await beginIslandPurchase(island.id, customName, "Explorer");
+  if (result.ok && result.redirectUrl) {
+    window.location.assign(result.redirectUrl);
+    return;
+  }
+  showToast(result.error || "Could not start checkout.", 4600);
+}
+
+function onBuyIslandClick(island) {
+  if (!islandStore.enabled) {
+    showToast("The deed office opens at launch — check back soon!", 4200);
+    return;
+  }
+  let customName = "";
+  if (!island.name) {
+    const input = islandDeedsGrid?.querySelector(`[data-name-for="${island.id}"]`);
+    customName = input?.value?.trim() || "";
+    if (!customName) {
+      showToast("Name your island before buying its deed.", 3600);
+      input?.focus();
+      return;
+    }
+  }
+  const proceed = () => requestIslandPurchase(island, customName);
+  if (kidsMode?.isEnabled?.()) {
+    openParentGate(proceed);
+  } else {
+    proceed();
+  }
+}
+
+// ── Parent gate (kids mode): math check + press-and-hold to confirm ───────────
+const PARENT_GATE_HOLD_MS = 1200;
+let parentGatePass = null;
+let parentGateHoldTimer = 0;
+
+function resetParentGateHold() {
+  clearTimeout(parentGateHoldTimer);
+  parentGateHoldTimer = 0;
+  if (parentGateHold) {
+    parentGateHold.dataset.holding = "0";
+    if (parentGateHoldFill) {
+      parentGateHoldFill.style.transition = "none";
+      parentGateHoldFill.style.width = "0%";
+    }
+  }
+}
+
+function openParentGate(onPass) {
+  if (!parentGateDialog) {
+    onPass();
+    return;
+  }
+  const a = 3 + Math.floor(Math.random() * 7);
+  const b = 2 + Math.floor(Math.random() * 8);
+  parentGateDialog.dataset.sum = String(a + b);
+  if (parentGateMath) parentGateMath.textContent = `${a} + ${b} = ?`;
+  if (parentGateAnswer) parentGateAnswer.value = "";
+  if (parentGateError) parentGateError.textContent = "";
+  resetParentGateHold();
+  parentGatePass = onPass;
+  if (!parentGateDialog.open) parentGateDialog.showModal();
+  parentGateAnswer?.focus();
+}
+
+function completeParentGate() {
+  resetParentGateHold();
+  parentGateDialog?.close();
+  const cb = parentGatePass;
+  parentGatePass = null;
+  cb?.();
+}
+
+parentGateHold?.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const sum = Number(parentGateDialog?.dataset?.sum || -1);
+  const answer = Number(parentGateAnswer?.value ?? NaN);
+  if (answer !== sum) {
+    if (parentGateError) parentGateError.textContent = "Solve the sum first, then hold the green button.";
+    parentGateAnswer?.focus();
+    return;
+  }
+  if (parentGateError) parentGateError.textContent = "";
+  parentGateHold.dataset.holding = "1";
+  if (parentGateHoldFill) {
+    parentGateHoldFill.style.transition = `width ${PARENT_GATE_HOLD_MS}ms linear`;
+    // Force a style flush so the transition always starts from 0%.
+    void parentGateHoldFill.offsetWidth;
+    parentGateHoldFill.style.width = "100%";
+  }
+  clearTimeout(parentGateHoldTimer);
+  parentGateHoldTimer = window.setTimeout(completeParentGate, PARENT_GATE_HOLD_MS);
+});
+["pointerup", "pointercancel", "pointerleave"].forEach((type) => {
+  parentGateHold?.addEventListener(type, () => resetParentGateHold());
+});
+parentGateCancel?.addEventListener("click", () => {
+  resetParentGateHold();
+  parentGatePass = null;
+  parentGateDialog?.close();
+});
+
+islandDeedsBtn?.addEventListener("click", () => {
+  void openIslandDeeds();
+});
+islandDeedsCloseBtn?.addEventListener("click", () => islandDeedsDialog?.close());
+islandReturnBtn?.addEventListener("click", () => {
+  engine?.teleportHomeIsland?.();
+});
+islandExportBtn?.addEventListener("click", async () => {
+  const bundle = exportDeedBundle();
+  if (!bundle) {
+    showToast("No deeds yet — buy an island first!", 3600);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(bundle);
+    showToast("Deed code copied — paste it on any device to restore your islands.", 4600);
+  } catch {
+    showToast("Could not copy automatically — your deed code is in the store console.", 3600);
+    console.info("Island deed code:", bundle);
+  }
+});
+islandRestoreBtn?.addEventListener("click", () => {
+  const raw = islandRestoreInput?.value?.trim();
+  if (!raw) {
+    showToast("Paste a deed code first.", 3200);
+    return;
+  }
+  const result = importDeedBundle(raw);
+  if (!result.ok) {
+    showToast(result.error || "That deed code did not work.", 4200);
+    return;
+  }
+  islandRestoreInput.value = "";
+  showToast(`Restored ${result.added} deed${result.added === 1 ? "" : "s"} — welcome back, landowner!`, 4600);
+  engine?.refreshIslandDeeds?.();
+  renderIslandDeeds();
+});
+islandDeedsGrid?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-action]");
+  if (!btn) return;
+  const id = btn.dataset.islandId;
+  const island = getCatalogIsland(id);
+  if (!island) return;
+  const action = btn.dataset.action;
+
+  if (action === "buy") {
+    onBuyIslandClick(island);
+    return;
+  }
+  if (action === "visit") {
+    engine?.teleportToIslandId?.(island.id);
+    islandDeedsDialog?.close();
+    showToast(`Welcome to ${getIslandDisplayName(island)} — press + Add to build your dream.`, 4600);
+    return;
+  }
+  if (action === "rename") {
+    const input = islandDeedsGrid.querySelector(`[data-rename-for="${island.id}"]`);
+    const nextName = input?.value?.trim() || "";
+    if (!nextName) {
+      showToast("Type the new name first.", 3200);
+      return;
+    }
+    void renameOwnedIsland(island.id, nextName).then((result) => {
+      if (result.ok) {
+        showToast(`Renamed to ${result.name} — the Shoals approve.`, 4200);
+        engine?.refreshIslandDeeds?.();
+        renderIslandDeeds(island.id);
+      } else {
+        showToast(result.error || "Rename failed.", 4200);
+      }
+    });
+  }
+});
+
+// Returning from Stripe Checkout? Fulfil the pending deed.
+const deedSession = urlParams.get("deed_session");
+const deedCancelled = urlParams.get("deed_cancelled");
+if (deedSession || deedCancelled) {
+  urlParams.delete("deed_session");
+  urlParams.delete("deed_cancelled");
+  const clean = `${location.pathname}${urlParams.toString() ? `?${urlParams.toString()}` : ""}${location.hash}`;
+  try {
+    history.replaceState(null, "", clean);
+  } catch {
+    // non-fatal
+  }
+}
+
+async function handleDeedBoot() {
+  if (deedCancelled) {
+    showToast("Checkout cancelled — everything stays as it was.", 3800);
+  }
+  if (deedSession) {
+    const result = await fulfillPendingPurchase(deedSession);
+    if (result.ok) {
+      showToast(`🎉 ${result.name} is officially yours!`, 5200);
+      engine?.refreshIslandDeeds?.();
+      await openIslandDeeds(result.island?.id || null);
+      return;
+    }
+    showToast(result.error || "We couldn't confirm that purchase.", 5200);
+    await openIslandDeeds();
+    return;
+  }
+  // Quietly verify cached deeds against the server; drop anything rejected.
+  try {
+    await verifyDeedsWithServer();
+    engine?.refreshIslandDeeds?.();
+  } catch {
+    // offline — keep local deeds
+  }
+  updateIslandDeedsStatus();
+}
+handleDeedBoot();
 
 initWorld();
