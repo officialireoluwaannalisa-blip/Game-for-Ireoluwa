@@ -5304,15 +5304,36 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
 
   function getInteractiveDirectory() {
     rebuildSceneListsIfNeeded();
-    return cachedAllEntities
-      .filter((ent) => ent.interactive)
-      .map((ent) => ({
+    const seen = new Set();
+    const entries = [];
+    for (const ent of cachedAllEntities) {
+      if (!ent.interactive) continue;
+      seen.add(ent.id);
+      entries.push({
         id: ent.id,
         name: ent.data?.name || "Playable creation",
         kind: ent.data?.blueprint?.interaction?.kind || null,
         x: ent.x,
         z: ent.z,
-      }));
+      });
+    }
+    // Creations stream in over time; uninstantiated interactives still exist in the
+    // world snapshot and can be focused + built on demand via focusCreationById().
+    if (currentWorld?.creations) {
+      for (const c of currentWorld.creations) {
+        if (!c || seen.has(c.id)) continue;
+        const kind = c.blueprint?.interaction?.kind;
+        if (!kind) continue;
+        entries.push({
+          id: c.id,
+          name: c.name || "Playable creation",
+          kind,
+          x: Number(c.x) || 0,
+          z: Number(c.z) || 0,
+        });
+      }
+    }
+    return entries;
   }
 
   function arcadeControl(action, value) {
@@ -5868,7 +5889,8 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
         }
       }
     } else if (typeof topYHint === "number") {
-      initialPitch = Math.min(0.22, Math.max(0.01, (topYHint * 0.42 - FP_EYE_HEIGHT) / standDist));
+      // Negative pitch looks down; clamp below 0 so low game tables are in frame.
+      initialPitch = Math.min(0.22, Math.max(-0.62, (topYHint * 0.5 - FP_EYE_HEIGHT) / standDist));
     }
 
     const angleOffsets = [0, 0.3, -0.3, 0.62, -0.62, 0.96, -0.96, 1.35, -1.35, 1.85, -1.85, Math.PI];
@@ -6929,7 +6951,11 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
       if (interiorSystem.isSitting()) {
         interiorSystem.standUp();
       }
-      const stand = Math.max(7.5, (ent.footprintRadius || 3.4) + 5.0);
+      // Interactive games get a close stand-off so the "E — Play …" prompt is
+      // immediately in range; buildings keep the wider approach distance.
+      const stand = ent.interactive
+        ? Math.max(3.6, (ent.footprintRadius || 2.0) + 2.2)
+        : Math.max(7.5, (ent.footprintRadius || 3.4) + 5.0);
       placeFirstPersonNear(ent.x, ent.z, fp.yaw, stand, ent.topY);
       refreshInteractionTarget();
       return;

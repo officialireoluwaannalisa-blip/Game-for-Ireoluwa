@@ -894,16 +894,25 @@ function renderGamesMenu() {
     .map((game) => {
       const isArcade = ARCADE_GAMES.includes(game);
       const target = isArcade ? null : targets.get(game.id);
+      // A game that exists in the raw world but vanished from the kids-filtered
+      // world is intentionally hidden (e.g. the Jackpot Automaton) — say so.
+      const hiddenByKidsMode =
+        !isArcade &&
+        !target &&
+        Boolean(kidsMode?.isEnabled?.()) &&
+        (rawWorldData?.creations || []).some((c) => c?.blueprint?.interaction?.kind === game.id);
       const rawBest = game.bestMetric === "moves"
         ? getLowest(game.id, game.bestMetric)
         : getBest(game.id, game.bestMetric);
       const bestText = rawBest > 0 ? `Best ${rawBest}` : "No record yet";
-      const buttonLabel = isArcade ? "Launch" : target ? "Go there" : "Not placed";
+      const buttonLabel = isArcade ? "Launch" : target ? "Go there" : hiddenByKidsMode ? "🔒 Kids Mode" : "Not placed";
       const statusText = isArcade
         ? "Dedicated 3D arena"
         : target
           ? `In the world · ${escapeGameHtml(target.name)}`
-          : "Sculpt one or find it later";
+          : hiddenByKidsMode
+            ? "Hidden in Kids Mode — turn off Kids Mode (top-left toggle) to play"
+            : "Sculpt one or find it later";
       const lastResult = getLastResult(game.id);
       const lastText = lastResult
         ? `Last round: ${escapeGameHtml(lastResult.label)}${lastResult.score > 0 ? ` · ${lastResult.score}` : ""}`
