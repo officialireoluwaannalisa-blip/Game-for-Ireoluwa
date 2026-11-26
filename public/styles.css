@@ -3082,3 +3082,206 @@ body[data-arcade-active="1"] .cam-controls {
   .island-deeds-head, .island-deeds-status, .island-deeds-footer { padding-left: 14px; padding-right: 14px; }
   .island-location-pill { font-size: 0.78rem; gap: 8px; }
 }
+
+/* ════════ Island Deeds — embedded checkout (glassmorphism + claymorphism) ════════ */
+
+.checkout-dialog {
+  width: min(1020px, calc(100vw - 24px));
+  max-height: min(92vh, 780px);
+  overflow: hidden;
+  border: none;
+  padding: 0;
+  border-radius: 28px;
+  background: transparent;
+  color: #f5f3ff;
+}
+.checkout-dialog::backdrop {
+  background:
+    radial-gradient(1200px 700px at 20% -10%, rgba(129, 140, 248, 0.32), transparent 60%),
+    radial-gradient(1000px 700px at 110% 110%, rgba(244, 114, 182, 0.28), transparent 55%),
+    rgba(16, 12, 46, 0.62);
+  backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+}
+
+/* ── Frosted glass shell ─────────────────────────────────────────────── */
+.checkout-glass {
+  position: relative;
+  overflow: hidden auto;
+  max-height: min(92vh, 780px);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: linear-gradient(148deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.10) 38%, rgba(148, 163, 184, 0.14));
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  box-shadow:
+    0 34px 90px rgba(9, 6, 33, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* Ambient aurora orbs drifting behind the glass */
+.checkout-hero-strip { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: inherit; }
+.checkout-orb { position: absolute; border-radius: 999px; filter: blur(46px); opacity: 0.65; }
+.checkout-orb-a { width: 340px; height: 340px; left: -120px; top: -120px; background: radial-gradient(circle at 35% 35%, #818cf8, #4f46e5 70%); animation: checkout-drift 14s ease-in-out infinite alternate; }
+.checkout-orb-b { width: 280px; height: 280px; right: -90px; bottom: -110px; background: radial-gradient(circle at 60% 60%, #f472b6, #be185d 72%); animation: checkout-drift 17s ease-in-out infinite alternate-reverse; }
+.checkout-orb-c { width: 200px; height: 200px; left: 42%; top: 58%; background: radial-gradient(circle at 50% 50%, #34d399, #047857 70%); opacity: 0.45; animation: checkout-drift 19s ease-in-out infinite alternate; }
+@keyframes checkout-drift { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(34px, -28px, 0) scale(1.08); } }
+@media (prefers-reduced-motion: reduce) { .checkout-orb { animation: none; } }
+
+.checkout-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 5;
+  width: 38px; height: 38px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 17px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.checkout-close:hover { transform: scale(1.08) rotate(4deg); background: rgba(255, 255, 255, 0.28); }
+
+.checkout-layout {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.92fr) 1.08fr;
+  gap: 22px;
+  padding: 26px;
+}
+@media (max-width: 860px) {
+  .checkout-layout { grid-template-columns: 1fr; padding: 18px; }
+  .checkout-dialog, .checkout-glass { max-height: 88vh; }
+}
+
+/* ── Claymorphism island card (left column) ──────────────────────────── */
+.checkout-clay-card {
+  position: relative;
+  z-index: 1;
+  border-radius: 26px;
+  padding: 22px 22px 18px;
+  color: #3b2d1f;
+  background: linear-gradient(165deg, #fde68a 0%, #fcd34d 34%, #f5c97b 78%, #e9b96e 100%);
+  border: 1px solid rgba(146, 64, 14, 0.18);
+  box-shadow:
+    inset 2.5px 2.5px 6px rgba(255, 255, 255, 0.75),
+    inset -4px -5px 9px rgba(146, 64, 14, 0.28),
+    0 18px 38px rgba(9, 6, 33, 0.42);
+}
+.checkout-kicker {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #78350f;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(146, 64, 14, 0.22);
+  padding: 5px 11px;
+  border-radius: 999px;
+  box-shadow: inset 1px 1px 2px rgba(255,255,255,0.8), 2px 3px 6px rgba(120,53,15,0.22);
+}
+.checkout-clay-title {
+  margin: 12px 0 6px;
+  font-size: 27px;
+  line-height: 1.15;
+  font-weight: 900;
+  color: #422006;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+}
+.checkout-clay-blurb { margin: 0 0 14px; font-size: 13.5px; line-height: 1.45; color: #57340e; }
+
+.checkout-spec-row { display: flex; gap: 10px; margin-bottom: 14px; }
+.checkout-spec {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  border-radius: 18px;
+  padding: 9px 6px 8px;
+  background: linear-gradient(160deg, #fff7ed, #fde9c8);
+  border: 1px solid rgba(146, 64, 14, 0.16);
+  box-shadow:
+    inset 1.5px 1.5px 3px rgba(255,255,255,0.9),
+    inset -2px -3px 5px rgba(146,64,14,0.18),
+    1.5px 2.5px 5px rgba(120,53,15,0.2);
+}
+.checkout-spec-value { display: block; font-size: 12.5px; font-weight: 900; color: #451a03; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em; padding-top: 1px; }
+.checkout-spec-label { display: block; font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 700; color: #8a5a16; margin-top: 2px; }
+
+.checkout-price-block {
+  border-radius: 20px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: linear-gradient(150deg, #fffbeb, #fef3c7);
+  border: 1px solid rgba(146, 64, 14, 0.2);
+  box-shadow: inset 2px 2px 4px rgba(255,255,255,0.95), inset -3px -3px 6px rgba(146,64,14,0.16), 0 3px 7px rgba(120,53,15,0.18);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.checkout-price { font-size: 33px; font-weight: 900; color: #422006; letter-spacing: -0.02em; }
+.checkout-price small { display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #92400e; }
+.checkout-price-note { flex: 1 1 120px; font-size: 10.5px; line-height: 1.4; text-align: right; color: #78521a; }
+
+.checkout-promise-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.checkout-promise-list li {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; font-weight: 650; color: #4a2a08;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255,255,255,0.7);
+  padding: 8px 11px; border-radius: 14px;
+  box-shadow: inset 1px 1px 2px rgba(255,255,255,0.9), 1px 2px 4px rgba(120,53,15,0.15);
+}
+.checkout-promise-ico {
+  flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 10px;
+  background: linear-gradient(150deg, #fef9c3, #fde68a);
+  box-shadow: inset 1.5px 1.5px 2px rgba(255,255,255,0.95), inset -2px -2px 3px rgba(146,64,14,0.25);
+  font-size: 14px;
+}
+
+/* ── Payment panel (right column, glass + clay inputs) ───────────────── */
+.checkout-form-panel {
+  position: relative;
+  z-index: 1;
+  border-radius: 26px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: linear-gradient(165deg, rgba(30, 27, 75, 0.55), rgba(30, 27, 75, 0.34));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 16px 40px rgba(9,6,33,0.35);
+}
+.checkout-form-head { display: flex; align-items: center; gap: 12px; color: #e0e7ff; }
+.checkout-form-head strong { display: block; font-size: 15px; letter-spacing: 0.01em; }
+.checkout-form-head span:last-child, .checkout-form-head div span { display: block; font-size: 11px; color: #a5b4fc; }
+.checkout-lock {
+  width: 44px; height: 44px; display: grid; place-items: center; font-size: 19px; border-radius: 14px;
+  background: linear-gradient(150deg, #6366f1, #4338ca);
+  border: 1px solid rgba(255,255,255,0.35);
+  box-shadow: inset 1.5px 1.5px 3px rgba(255,255,255,0.4), 0 6px 14px rgba(67,56,202,0.45);
+}
+
+.checkout-form-host {
+  min-height: 320px;
+  border-radius: 20px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    inset 2px 2px 6px rgba(15, 23, 42, 0.10),
+    0 10px 26px rgba(9, 6, 33, 0.4);
+}
+
+.checkout-error { min-height: 18px; margin: 0; font-size: 12.5px; font-weight: 700; color: #fda4af; }
+.checkout-testmode { margin: 0; font-size: 11.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #fde68a; }
+.checkout-trust-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; color: #c7d2fe; justify-content: center; }
+.checkout-trust-row i { opacity: 0.5; font-style: normal; }

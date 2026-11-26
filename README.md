@@ -68,15 +68,19 @@ snapshot and runs every game/learning feature locally. The **live server** uses:
 ## Island Deeds — the Outer Shoals (20 unlockable islands)
 
 Beyond the main island lie **20 empty Outer Shoals islands** — different sizes
-(28–92 m across, ~600–3,300 m²), different biomes, and different one-time prices
+(72–256 m across, ~4,000–51,000 m² — the Crown Isle is nearly as wide as the
+main island), arranged in two rings of ten, different biomes, and different one-time prices
 (**$1.99 → $19.99**). Ten are named; the other ten are **Unnamed Isles** that the
 buyer names at purchase. Islands start empty — owning the deed unlocks the usual
 builder on that island (and only there; the main island stays free for everyone).
 
 - **Buying** — the 🏝️ Deeds dock button opens the store. Checkout goes through
-  **Stripe Checkout** (`api/islands/checkout`); prices ALWAYS come from the shared
-  catalog (`shared/islandCatalog.mjs`), never from the client. After Stripe confirms
-  the payment, `api/islands/fulfill` mints a signed **deed token** (HMAC-SHA256);
+  an **embedded Stripe Checkout Form** (`ui_mode: "form"`, Stripe API
+  `2026-03-25.dahlia`, `api/islands/checkout`) rendered inline in the Deeds checkout
+  page — no redirect; prices ALWAYS come from the shared catalog
+  (`shared/islandCatalog.mjs`), never from the client. `/api/islands/fulfill` verifies
+  the payment with Stripe (`payment_status === "paid"`), reads the island from the
+  product metadata, and mints a signed **deed token** (HMAC-SHA256);
   the client caches it in `localStorage` and verifies cached deeds against
   `api/islands/verify` on boot.
 - **Naming** — Unnamed Isles are named by the buyer at checkout (validated on both
@@ -87,7 +91,7 @@ builder on that island (and only there; the main island stays free for everyone)
   copies a deed code, and “Restore” on any device re-imports it. Real cross-device
   accounts (email login) are future work.
 - **Kids Mode** — buying always passes a parent gate first (math question +
-  press-and-hold confirm) before the Stripe redirect.
+  press-and-hold confirm) before the secure form ever mounts.
 - **Enforcement** — building is gated to the main island + islands you own
   (`canBuildAtIsland`); unowned islands show a for-sale toast and open the store.
   As with all client-side games, the gate is client-enforced; the money side is

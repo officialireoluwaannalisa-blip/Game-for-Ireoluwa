@@ -3,43 +3,16 @@
 
 import * as THREE from "three";
 import { Vox, buildVoxelMesh, mergeVoxelMeshInstances } from "./vox.js";
+import { clampPointToAccessibleIslands } from "./accessible_bounds.js";
 
 const SKIN_TONES = ["#f5cfa8", "#e6b48a", "#c98e63", "#8d5838", "#f7dcc0"];
 const PANTS_COLORS = ["#394a6d", "#4b4f59", "#6b4f3a", "#3d6b5e", "#54476e"];
 
-const ISLAND_HALF_EXTENT = 163.5;
-const ISLAND_SUPERELLIPSE_EXP = 3.1;
-
-function getIslandInlandMargin(x, z) {
-  const ax = Math.abs(x) / ISLAND_HALF_EXTENT;
-  const az = Math.abs(z) / ISLAND_HALF_EXTENT;
-  const superDist =
-    Math.pow(
-      Math.pow(ax, ISLAND_SUPERELLIPSE_EXP) + Math.pow(az, ISLAND_SUPERELLIPSE_EXP),
-      1 / ISLAND_SUPERELLIPSE_EXP,
-    ) * ISLAND_HALF_EXTENT;
-  const theta = Math.atan2(z, x);
-  const warp =
-    9.2 * Math.cos(2 * theta + 1.55) +
-    7.8 * Math.sin(3 * theta + 0.75) +
-    5.6 * Math.cos(4 * theta + 3.08) +
-    4.1 * Math.sin(5 * theta - 0.85) +
-    2.6 * Math.cos(7 * theta + 0.4);
-  return ISLAND_HALF_EXTENT + warp - superDist;
-}
-
+// Villagers walk the same ground the player can: the main island plus any
+// Outer Shoals island the player owns (paid + confirmed deed). Locked islands
+// behave as open sea — see accessible_bounds.js.
 function clampVillagerToIsland(x, z, minMargin = 2.0) {
-  if (getIslandInlandMargin(x, z) >= minMargin) return [x, z];
-  const r = Math.hypot(x, z);
-  if (r < 0.001) return [0, 0];
-  let lo = 0;
-  let hi = 1;
-  for (let i = 0; i < 10; i++) {
-    const mid = (lo + hi) * 0.5;
-    if (getIslandInlandMargin(x * mid, z * mid) >= minMargin) lo = mid;
-    else hi = mid;
-  }
-  return [x * lo, z * lo];
+  return clampPointToAccessibleIslands(x, z, minMargin);
 }
 
 export function buildVillagerRig(villager, index = 0) {

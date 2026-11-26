@@ -59,7 +59,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: "2026-03-25.dahlia",
+    });
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     const paid =
       session?.payment_status === "paid" ||
@@ -67,7 +69,24 @@ export default async function handler(req, res) {
     if (!paid) {
       return sendJson(res, 402, { error: "That checkout has not been paid yet." });
     }
-    const meta = session.metadata || {};
+    // Checkout Studio retires the standalone session metadata parameter, so the
+    // deed data travels in the product metadata inside line_items. Expand it;
+    // fall back to legacy session metadata for sessions created before the
+    // embedded-form upgrade.
+    let lineMeta = {};
+    try {
+      const lineItems = await stripe.checkout.sessions.listLineItems(session.id, {
+        limit: 1,
+        expand: ["data.price.product"],
+      });
+      const product = lineItems?.data?.[0]?.price?.product;
+      if (product && typeof product === "object" && product.metadata) {
+        lineMeta = product.metadata;
+      }
+    } catch {
+      // fall back to legacy session metadata below
+    }
+    const meta = { ...(session.metadata || {}), ...lineMeta };
     const result = fulfillFromMetadata(meta.island_id, meta.island_name, session.id);
     if (result.error) return sendJson(res, result.status || 400, { error: result.error });
     return sendJson(res, 200, { deed: result.deed });

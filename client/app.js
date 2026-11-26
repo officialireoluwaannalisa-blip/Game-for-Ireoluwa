@@ -61,6 +61,17 @@ const islandDeedsGrid = document.getElementById("island-deeds-grid");
 const islandDeedsStatus = document.getElementById("island-deeds-status");
 const islandDeedsStatusText = document.getElementById("island-deeds-status-text");
 const islandDeedsOwnedCount = document.getElementById("island-deeds-owned-count");
+const islandCheckoutDialog = document.getElementById("island-checkout-dialog");
+const islandCheckoutCloseBtn = document.getElementById("island-checkout-close");
+const islandCheckoutName = document.getElementById("checkout-island-name");
+const islandCheckoutBlurb = document.getElementById("checkout-island-blurb");
+const islandCheckoutSize = document.getElementById("checkout-island-size");
+const islandCheckoutArea = document.getElementById("checkout-island-area");
+const islandCheckoutBiome = document.getElementById("checkout-island-biome");
+const islandCheckoutPrice = document.getElementById("checkout-island-price");
+const islandCheckoutFormHost = document.getElementById("island-checkout-form");
+const islandCheckoutError = document.getElementById("island-checkout-error");
+const islandCheckoutTestMode = document.getElementById("island-checkout-testmode");
 const islandRestoreInput = document.getElementById("island-restore-input");
 const islandRestoreBtn = document.getElementById("island-restore-btn");
 const islandExportBtn = document.getElementById("island-export-btn");
@@ -2045,13 +2056,137 @@ async function openIslandDeeds(flashId = null) {
   }
 }
 
+// ── Embedded Stripe Checkout (Checkout Form SDK, ui_mode "form") ────────────
+// The server (/api/islands/checkout) returns {client_secret, session_id}; we
+// mount Stripe's hosted form inline inside #island-checkout-dialog. Card data
+// never touches our origin. On confirm, we ask /api/islands/fulfill to verify
+// the payment with Stripe and mint the signed deed.
+const STRIPE_CHECKOUT_APPEARANCE = {
+  theme: "stripe",
+  labels: "auto",
+  inputs: "spaced",
+  variables: {
+    borderRadius: "4px",
+    colorBackground: "#ffffff",
+    colorDanger: "#df1b41",
+    colorPrimary: "#0570de",
+    colorSuccess: "#00c853",
+    colorText: "#30313d",
+    fontFamily: "default",
+    fontSizeBase: "16px",
+    spacingUnit: "4px",
+  },
+};
+let embeddedCheckout = null;
+let embeddedForm = null;
+
+function teardownEmbeddedCheckout() {
+  embeddedForm = null;
+  embeddedCheckout = null;
+  if (islandCheckoutFormHost) islandCheckoutFormHost.innerHTML = "";
+  if (islandCheckoutError) islandCheckoutError.textContent = "";
+  if (islandCheckoutTestMode) islandCheckoutTestMode.hidden = true;
+}
+
+function closeEmbeddedCheckout() {
+  teardownEmbeddedCheckout();
+  if (islandCheckoutDialog?.open) islandCheckoutDialog.close();
+}
+
+async function completeEmbeddedPurchase(sessionId) {
+  const result = await fulfillPendingPurchase(sessionId);
+  closeEmbeddedCheckout();
+  if (result.ok) {
+    showToast(`🎉 ${result.name} is officially yours!`, 5200);
+    engine?.refreshIslandDeeds?.();
+    await openIslandDeeds(result.island?.id || null);
+    return;
+  }
+  showToast(result.error || "We couldn't confirm that purchase — if you were charged, contact support with your receipt.", 6200);
+  await openIslandDeeds();
+}
+
+async function mountEmbeddedCheckout({ island, name, clientSecret, sessionId, testMode }) {
+  if (!islandCheckoutDialog) return false;
+  // Populate the claymorphism island card.
+  const displayName = name || island.name || "Unnamed Isle";
+  const biomeLabel = (BIOME_LABEL && BIOME_LABEL[island.biome]) || island.biome || "Shoals";
+  if (islandCheckoutName) islandCheckoutName.textContent = displayName;
+  if (islandCheckoutBlurb) islandCheckoutBlurb.textContent = island.blurb || "An empty isle waiting for its keeper.";
+  if (islandCheckoutSize) islandCheckoutSize.textContent = `${island.diameterMeters} m`;
+  if (islandCheckoutArea) islandCheckoutArea.textContent = `${island.areaSqm.toLocaleString()} m²`;
+  if (islandCheckoutBiome) islandCheckoutBiome.textContent = biomeLabel;
+  if (islandCheckoutPrice) {
+    islandCheckoutPrice.innerHTML = `${formatPrice(island.priceCents)}<small>one-time deed</small>`;
+  }
+  if (islandCheckoutError) islandCheckoutError.textContent = "";
+  if (islandCheckoutTestMode) islandCheckoutTestMode.hidden = !testMode;
+  if (!islandCheckoutDialog.open) islandCheckoutDialog.showModal();
+
+  teardownEmbeddedCheckoutKeepDialog();
+
+  try {
+    const cfg = await fetchIslandConfig();
+    const publishableKey = cfg.publishableKey;
+    if (!publishableKey) throw new Error("Stripe is not configured on this deployment yet.");
+    if (typeof window.Stripe !== "function") throw new Error("Stripe.js failed to load — check your connection and try again.");
+    const stripe = window.Stripe(publishableKey);
+    embeddedCheckout = stripe.initCheckoutFormSdk({ clientSecret, appearance: STRIPE_CHECKOUT_APPEARANCE });
+    embeddedForm = embeddedCheckout.createForm({ layout: "expanded" });
+    embeddedForm.mount("#island-checkout-form");
+    const loadActionsResult = await embeddedCheckout.loadActions();
+    if (loadActionsResult?.type !== "success") {
+      throw new Error("The secure form could not be loaded — please try again.");
+    }
+    embeddedForm.on("confirm", async (event) => {
+      try {
+        await loadActionsResult.actions.confirm({ formConfirmEvent: event });
+        await completeEmbeddedPurchase(sessionId);
+      } catch (err) {
+        console.error("Payment confirmation error:", err);
+        if (islandCheckoutError) {
+          islandCheckoutError.textContent = "Payment could not be confirmed — no deed was issued. Please try again.";
+        }
+      }
+    });
+    return true;
+  } catch (err) {
+    console.error("Embedded checkout failed:", err);
+    if (islandCheckoutError) {
+      islandCheckoutError.textContent = err?.message || "Checkout could not start — please try again.";
+    }
+    return false;
+  }
+}
+
+function teardownEmbeddedCheckoutKeepDialog() {
+  embeddedForm = null;
+  embeddedCheckout = null;
+  if (islandCheckoutFormHost) islandCheckoutFormHost.innerHTML = "";
+}
+
 async function requestIslandPurchase(island, customName) {
   const result = await beginIslandPurchase(island.id, customName, "Explorer");
-  if (result.ok && result.redirectUrl) {
+  if (!result.ok) {
+    showToast(result.error || "Could not start checkout.", 4600);
+    return;
+  }
+  if (result.redirectUrl) {
+    // Test mode (ISLAND_DEEDS_TEST_MODE=1): synthetic local return, no Stripe.
     window.location.assign(result.redirectUrl);
     return;
   }
-  showToast(result.error || "Could not start checkout.", 4600);
+  if (result.clientSecret) {
+    await mountEmbeddedCheckout({
+      island,
+      name: result.name,
+      clientSecret: result.clientSecret,
+      sessionId: result.sessionId,
+      testMode: false,
+    });
+    return;
+  }
+  showToast("Could not start checkout.", 4600);
 }
 
 function onBuyIslandClick(island) {
@@ -2152,6 +2287,7 @@ islandDeedsBtn?.addEventListener("click", () => {
   void openIslandDeeds();
 });
 islandDeedsCloseBtn?.addEventListener("click", () => islandDeedsDialog?.close());
+islandCheckoutCloseBtn?.addEventListener("click", () => closeEmbeddedCheckout());
 islandReturnBtn?.addEventListener("click", () => {
   engine?.teleportHomeIsland?.();
 });

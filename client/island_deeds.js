@@ -91,12 +91,21 @@ export function getIslandDisplayName(island) {
   return deed?.name || island.name || "Unnamed Isle";
 }
 
-/** The build rule: the main island is free; outer islands require a deed. */
+/** The build rule: the main island is free; outer islands require a deed.
+ * Unowned islands are refused outright. On an owned island, placements land on
+ * the flat y=0 plateau (radius × 0.62 + 2 m slack) — beach terraces are too
+ * steep for creations, so coordinates are pulled toward the island centre. */
 export function canBuildAtIsland(x, z, islandList = ISLANDS) {
   for (const island of islandList) {
-    if (Math.hypot(x - island.x, z - island.z) <= island.radius + 6.5) {
-      if (isIslandOwned(island.id)) return { ok: true, island };
-      return { ok: false, island };
+    const dx = x - island.x;
+    const dz = z - island.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= island.radius + 6.5) {
+      if (!isIslandOwned(island.id)) return { ok: false, island };
+      const plateau = island.radius * 0.62 + 2.0;
+      if (d <= plateau) return { ok: true, island };
+      const k = plateau / (d || 1);
+      return { ok: true, island, clamped: [island.x + dx * k, island.z + dz * k] };
     }
   }
   return { ok: true, island: null };
@@ -121,10 +130,10 @@ export async function fetchIslandConfig() {
   try {
     const res = await fetch(`${apiBase()}/api/islands/config`, { headers: { Accept: "application/json" } });
     const body = await readJson(res);
-    if (!res.ok || !body) return { enabled: false, testMode: false, error: body?.error || `Store responded ${res.status}` };
-    return { enabled: Boolean(body.enabled), testMode: Boolean(body.testMode) };
+    if (!res.ok || !body) return { enabled: false, testMode: false, publishableKey: null, error: body?.error || `Store responded ${res.status}` };
+    return { enabled: Boolean(body.enabled), testMode: Boolean(body.testMode), publishableKey: body.publishableKey || null };
   } catch (err) {
-    return { enabled: false, testMode: false, error: err?.message || "Island store unreachable" };
+    return { enabled: false, testMode: false, publishableKey: null, error: err?.message || "Island store unreachable" };
   }
 }
 
@@ -157,7 +166,9 @@ export async function verifyDeedsWithServer() {
 
 /**
  * Start a purchase. Caller is responsible for the kids parent gate before
- * invoking this. Returns {ok, redirectUrl?, error?}.
+ * invoking this.
+ * Returns {ok, redirectUrl?} in test mode (synthetic local return), or
+ * {ok, clientSecret, sessionId} for the embedded Checkout Form, or {ok:false, error}.
  */
 export async function beginIslandPurchase(islandId, customName, playerName) {
   const island = getCatalogIsland(islandId);
@@ -180,10 +191,18 @@ export async function beginIslandPurchase(islandId, customName, playerName) {
       body: JSON.stringify({ islandId, customName: resolved.customName, playerName: String(playerName || "").slice(0, 48) }),
     });
     const body = await readJson(res);
-    if (!res.ok || !body?.url) {
+    if (!res.ok) {
       return { ok: false, error: body?.error || `Could not start checkout (${res.status}).` };
     }
-    return { ok: true, redirectUrl: body.url, name: resolved.name };
+    // Embedded Checkout Form (production): server returns the client secret to mount.
+    if (body?.client_secret) {
+      return { ok: true, clientSecret: body.client_secret, sessionId: body.session_id || null, name: resolved.name };
+    }
+    // Test mode: the server returns a synthetic local redirect instead.
+    if (body?.url) {
+      return { ok: true, redirectUrl: body.url, name: resolved.name };
+    }
+    return { ok: false, error: "Checkout could not start." };
   } catch (err) {
     return { ok: false, error: err?.message || "Could not reach the island store." };
   }

@@ -41,6 +41,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 
     <link rel="stylesheet" href="/styles.css" />
+    <script src="https://js.stripe.com/dahlia/stripe.js"></script>
   </head>
   <body>
     <!-- Endless Animated Sunlit Grass Voxel Canvas -->
@@ -498,6 +499,54 @@
           <input id="island-restore-input" type="text" maxlength="4000" placeholder="Paste a deed code to restore your islands" aria-label="Restore deed code" />
           <button type="button" id="island-restore-btn">Restore</button>
           <button type="button" id="island-export-btn">Export my deeds</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Embedded Stripe Checkout (Island Deeds) — glass + clay checkout page -->
+    <dialog id="island-checkout-dialog" class="checkout-dialog" closedby="any" aria-label="Secure island checkout">
+      <div class="checkout-glass">
+        <button type="button" id="island-checkout-close" class="checkout-close" aria-label="Close checkout">✕</button>
+        <div class="checkout-hero-strip">
+          <span class="checkout-orb checkout-orb-a"></span>
+          <span class="checkout-orb checkout-orb-b"></span>
+          <span class="checkout-orb checkout-orb-c"></span>
+        </div>
+        <div class="checkout-layout">
+          <aside class="checkout-clay-card" aria-label="Island summary">
+            <span class="checkout-kicker">🏝️ IREOLUWA · The Outer Shoals</span>
+            <h2 id="checkout-island-name" class="checkout-clay-title">Your Island</h2>
+            <p id="checkout-island-blurb" class="checkout-clay-blurb">An empty isle waiting for its keeper.</p>
+            <div class="checkout-spec-row">
+              <div class="checkout-spec"><span id="checkout-island-size" class="checkout-spec-value">—</span><span class="checkout-spec-label">across</span></div>
+              <div class="checkout-spec"><span id="checkout-island-area" class="checkout-spec-value">—</span><span class="checkout-spec-label">of land</span></div>
+              <div class="checkout-spec"><span id="checkout-island-biome" class="checkout-spec-value">—</span><span class="checkout-spec-label">biome</span></div>
+            </div>
+            <div class="checkout-price-block">
+              <div id="checkout-island-price" class="checkout-price">$0.00<small>one-time deed</small></div>
+              <span class="checkout-price-note">Never any rent. Never any ads. Yours forever.</span>
+            </div>
+            <ul class="checkout-promise-list">
+              <li><span class="checkout-promise-ico">✍️</span> Your name on the deed — signed &amp; portable to any device</li>
+              <li><span class="checkout-promise-ico">🧱</span> The full builder unlocks — build anything on your island</li>
+              <li><span class="checkout-promise-ico">🧭</span> Teleport in any time from the Deeds office</li>
+            </ul>
+          </aside>
+          <section class="checkout-form-panel" aria-label="Payment form">
+            <div class="checkout-form-head">
+              <span class="checkout-lock" aria-hidden="true">🔒</span>
+              <div>
+                <strong>Secure checkout</strong>
+                <span>Encrypted by Stripe — your card never touches our servers.</span>
+              </div>
+            </div>
+            <div id="island-checkout-form" class="checkout-form-host"></div>
+            <p id="island-checkout-error" class="checkout-error" role="status"></p>
+            <p id="island-checkout-testmode" class="checkout-testmode" hidden>Test checkout — no real card is charged.</p>
+            <div class="checkout-trust-row">
+              <span>🛡️ Signed deeds</span><i>•</i><span>💳 All major cards</span><i>•</i><span>🌍 Apple&nbsp;Pay &amp; Google&nbsp;Pay</span>
+            </div>
+          </section>
         </div>
       </div>
     </dialog>

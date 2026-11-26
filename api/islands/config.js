@@ -2,5 +2,9 @@
 import { sendJson, isStripeConfigured, isTestMode } from "../_lib/deed_tokens.mjs";
 
 export default function handler(_req, res) {
-  sendJson(res, 200, { enabled: isStripeConfigured(), testMode: isTestMode() });
+  const testMode = isTestMode();
+  const publishableKey = process.env.STRIPE_PUBLISHABLE_KEY || null;
+  // The embedded Checkout Form cannot mount without the publishable key.
+  const enabled = testMode || (isStripeConfigured() && Boolean(publishableKey));
+  sendJson(res, 200, { enabled, testMode, publishableKey });
 }

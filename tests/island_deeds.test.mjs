@@ -31,7 +31,7 @@ test("ten named + ten unnamed islands, all purchasable", () => {
   assert.equal(unnamed.length, 10);
   for (const island of ISLANDS) {
     assert.ok(island.priceCents > 0, `${island.id} needs a price`);
-    assert.ok(island.radius >= 10 && island.radius <= 50, `${island.id} radius in sane range`);
+    assert.ok(island.radius >= 30 && island.radius <= 140, `${island.id} radius in sane range`);
   }
 });
 
@@ -55,7 +55,7 @@ test("no two islands overlap each other", () => {
     for (let b = a + 1; b < ISLANDS.length; b++) {
       const d = Math.hypot(ISLANDS[a].x - ISLANDS[b].x, ISLANDS[a].z - ISLANDS[b].z);
       assert.ok(
-        d > ISLANDS[a].radius + ISLANDS[b].radius + 10,
+        d > ISLANDS[a].radius + ISLANDS[b].radius + 15,
         `${ISLANDS[a].id} and ${ISLANDS[b].id} overlap (d=${d.toFixed(1)})`,
       );
     }
@@ -210,4 +210,21 @@ test("checkout rejects unknown islands and bad unnamed names", async () => {
     res2,
   );
   assert.equal(res2.statusCode, 400);
+});
+
+test("Crown Isle is the biggest and still inside the far plane", () => {
+  const crown = ISLANDS.find((i) => i.id === "isle-crown");
+  assert.ok(crown.radius >= 120, "Crown Isle should be colossal");
+  for (const island of ISLANDS) {
+    const reach = Math.hypot(island.x, island.z) + island.radius;
+    assert.ok(reach < 820, `${island.id} visible inside the far planes (reach=${reach.toFixed(0)}m)`);
+  }
+});
+
+test("bigger islands cost more — sizes ascend with price tiers", () => {
+  for (const island of ISLANDS) {
+    // size should not crater as price rises by tier (spot check extremes)
+    if (island.priceCents >= 1499) assert.ok(island.radius >= 100, `${island.id} should be huge`);
+    if (island.priceCents <= 299) assert.ok(island.radius <= 42, `${island.id} should be small`);
+  }
 });

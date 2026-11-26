@@ -49,6 +49,7 @@ import {
 } from "./vehicle_physics.js";
 import { ISLANDS, buildIslandGroup } from "./islands.js";
 import { canBuildAtIsland, isIslandOwned, getIslandDisplayName } from "../island_deeds.js";
+import { clampPointToAccessibleIslands, getAccessibleIslandMarginInfo } from "./accessible_bounds.js";
 
 const CITY_SIGN_POS = [3.8, -10.8];
 const CITY_SIGN_YAW = 0.62;
@@ -91,16 +92,12 @@ function getMainIslandMargin(x, z) {
   return ISLAND_HALF_EXTENT + getIslandCoastWarp(theta) - superDist;
 }
 
-// Outer-shoals purchasable islands reuse the same coastal warp, scaled to the
-// island size so small isles keep organic (not circular) shorelines.
+// Outer-shoals purchasable islands are rendered as stepped circular mounds,
+// so their margin is circular too — margin > 0 iff [x, z] sits inside the
+// island's coastal crest. The buildable y=0 plateau is narrower still; see
+// canBuildAtIsland() and getIslandGroundHeight().
 export function getOuterIslandMargin(island, x, z) {
-  const dx = x - island.x;
-  const dz = z - island.z;
-  const d = Math.hypot(dx, dz);
-  const theta = Math.atan2(dz, dx);
-  const sizeScale = island.radius / ISLAND_HALF_EXTENT;
-  const warp = getIslandCoastWarp(theta * 2.6 + island.index * 1.93) * sizeScale * 1.6;
-  return island.radius + warp - d;
+  return island.radius - Math.hypot(x - island.x, z - island.z);
 }
 
 /** Which island dominates [x, z]? `island: null` means the main island. */
@@ -163,10 +160,13 @@ export function getIslandGroundHeight(x, z) {
   const m = info.margin;
   if (m >= 0) return 0;
   if (info.island) {
-    const out = -m;
-    const span = info.island.radius * 0.62 + 6.5;
-    const t = Math.min(1, Math.max(0, out / span));
-    return -4.4 * Math.pow(t, 1.35);
+    const island = info.island;
+    const d = Math.hypot(x - island.x, z - island.z);
+    const plateauEnd = island.radius * 0.62;
+    const beachOuter = island.radius + 6.5;
+    if (d <= plateauEnd) return 0;
+    const t = Math.min(1, Math.max(0, (d - plateauEnd) / Math.max(0.001, beachOuter - plateauEnd)));
+    return -Math.pow(t, 1.35) * 4.4;
   }
   const theta = Math.atan2(z, x);
   const cliff = getIslandCliffFactor(theta);
@@ -2133,7 +2133,7 @@ class CreationSimEntity {
   }
 
   sanitizeWanderTarget(rawX, rawZ, selfPad, isGlide, ponds, allEntities) {
-    let [tx, tz] = clampPointToIsland(rawX, rawZ, selfPad + 2.4);
+    let [tx, tz] = clampPointToAccessibleIslands(rawX, rawZ, selfPad + 2.4);
     for (let pass = 0; pass < 2; pass++) {
       // Town signboard
       {
@@ -2173,7 +2173,7 @@ class CreationSimEntity {
           tz = other.z + Math.sin(ang) * br;
         }
       }
-      [tx, tz] = clampPointToIsland(tx, tz, selfPad + 2.0);
+      [tx, tz] = clampPointToAccessibleIslands(tx, tz, selfPad + 2.0);
     }
     return [tx, tz];
   }
@@ -2252,7 +2252,7 @@ class CreationSimEntity {
         ponds,
         selfEnt: this,
         citySignPos: CITY_SIGN_POS,
-        clampPointToIslandFn: clampPointToIsland,
+        clampPointToIslandFn: clampPointToAccessibleIslands,
         dt: safeDt,
       });
       const dtTurn = safeDt * Math.max(0.15, Math.min(1.0, advice.speedScale));
@@ -2329,7 +2329,7 @@ class CreationSimEntity {
             ponds,
             selfEnt: this,
             citySignPos: CITY_SIGN_POS,
-            clampPointToIslandFn: clampPointToIsland,
+            clampPointToIslandFn: clampPointToAccessibleIslands,
           });
           return;
         }
@@ -2413,7 +2413,7 @@ class CreationSimEntity {
       ponds,
       selfEnt: this,
       citySignPos: CITY_SIGN_POS,
-      clampPointToIslandFn: clampPointToIsland,
+      clampPointToIslandFn: clampPointToAccessibleIslands,
       dt: safeDt,
     });
 
@@ -2589,7 +2589,7 @@ class CreationSimEntity {
           ponds,
           selfEnt: this,
           citySignPos: CITY_SIGN_POS,
-          clampPointToIslandFn: clampPointToIsland,
+          clampPointToIslandFn: clampPointToAccessibleIslands,
         });
       }
     }
@@ -2924,7 +2924,7 @@ class CreationSimEntity {
                 this.z = other.z + (bdz / bd) * br;
               }
             }
-            const [ix, iz] = clampPointToIsland(this.x, this.z, selfPad + 2.0);
+            const [ix, iz] = clampPointToAccessibleIslands(this.x, this.z, selfPad + 2.0);
             this.x = ix;
             this.z = iz;
           }
@@ -4082,6 +4082,12 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
   function teleportToIslandId(islandId) {
     const island = ISLANDS.find((isl) => isl.id === islandId);
     if (!island) return false;
+    if (!isIslandOwned(island.id)) {
+      // Hard gate: only a paid-and-confirmed deed (minted after Stripe reports
+      // the payment as paid) unlocks access. Belt-and-braces alongside the UI.
+      callbacks.onBuildLocked?.(island);
+      return false;
+    }
     anchorToIsland(island);
     // Arrive facing the main-island silhouette across the water.
     const yaw = Math.atan2(island.x, island.z);
@@ -5261,7 +5267,10 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
           pushOut(sc.x, sc.z, sc.isCoastalRock ? 0.85 : 0.52);
         }
       }
-      [x, z] = clampPointToSingleIsland(x, z, -5.0, activeBounds.island ?? null);
+      // Access rule: the union of the main island + islands the player OWNS.
+      // Unowned Outer Shoals islands behave as open sea — you can never
+      // step onto them without a confirmed (paid) deed.
+      [x, z] = clampPointToAccessibleIslands(x, z, -5.0);
     }
     return [x, z];
   }
@@ -5333,7 +5342,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
           pushOut(sc.x, sc.z, sc.isCoastalRock ? 1.35 : 1.0);
         }
       }
-      [x, z] = clampPointToIsland(x, z, 2.5);
+      [x, z] = clampPointToAccessibleIslands(x, z, 2.5);
     }
     return [x, z];
   }
@@ -6805,7 +6814,9 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
               callbacks.onBuildLocked?.(gate.island);
               return;
             }
-            const [sx, sz] = snapToClearMeadowSpot(g[0], g[1], previewPlotRadius);
+            const gx = gate.clamped ? gate.clamped[0] : g[0];
+            const gz = gate.clamped ? gate.clamped[1] : g[1];
+            const [sx, sz] = snapToClearMeadowSpot(gx, gz, previewPlotRadius);
             spotState.x = sx;
             spotState.z = sz;
             plotMarker.group.position.set(sx, 0, sz);
@@ -7295,7 +7306,7 @@ export function createMeadowWorldEngine(canvas, callbacks = {}, options = {}) {
         pondProps: cachedPonds,
         allEntities: cachedAllEntities,
         citySignPos: CITY_SIGN_POS,
-        clampPointToIslandFn: clampPointToIsland,
+        clampPointToIslandFn: clampPointToAccessibleIslands,
         onTrafficIncident: !ogMode ? callbacks.onTrafficIncident : null,
       });
     }

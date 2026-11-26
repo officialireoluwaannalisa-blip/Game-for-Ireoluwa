@@ -41,7 +41,9 @@ function voxelScaleFor(radius) {
   if (radius <= 17) return 1.12;
   if (radius <= 25) return 1.32;
   if (radius <= 35) return 1.62;
-  return 1.92;
+  if (radius <= 70) return 1.95;
+  if (radius <= 105) return 2.25;
+  return 2.45;
 }
 
 function hash2(i, k, seed) {
@@ -82,12 +84,17 @@ export function buildIslandGroup(island, { owned = false, displayName = null } =
       }
       const isRim = d > island.radius * 0.86;
       const n = hash2(i, k, seed);
-      // Under-structure
-      for (let y = -5; y < top; y++) {
-        if (top - y > 3) {
-          v.put(i, y, k, "basalt");
-        } else {
-          v.put(i, y, k, biome.side);
+      // Under-structure — SKIP for deep-interior plateau columns: all of their
+      // faces are interior (neighbors of equal height cull them), so those
+      // voxels cost build time but render nothing. Big islands get ~60% cheaper.
+      const deepInterior = d <= plateauEnd - 2.5 * scale;
+      if (!deepInterior) {
+        for (let y = -5; y < top; y++) {
+          if (top - y > 3) {
+            v.put(i, y, k, "basalt");
+          } else {
+            v.put(i, y, k, biome.side);
+          }
         }
       }
       // Surface voxel
@@ -107,7 +114,7 @@ export function buildIslandGroup(island, { owned = false, displayName = null } =
 
   // ── Decorations (top y=0): keep the centre clear for building ───────────────
   const decorSpots = [];
-  const decorCount = Math.floor(island.radius / 8) + 1;
+  const decorCount = Math.min(26, Math.floor(island.radius / 8) + 1);
   for (let dSeat = 0; dSeat < decorCount; dSeat++) {
     const ang = hash2(dSeat, 99, seed) * Math.PI * 2;
     const dist = (0.3 + hash2(dSeat, 55, seed) * 0.42) * island.radius;

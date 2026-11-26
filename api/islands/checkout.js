@@ -1,5 +1,8 @@
 // POST /api/islands/checkout — create a Stripe Checkout Session for an island deed.
 // Prices ALWAYS come from the shared catalog — never from the client.
+// The session uses ui_mode "form" (embedded Checkout Form, Stripe API
+// 2026-03-25.dahlia): the server returns {client_secret, session_id} and the
+// browser mounts Stripe's hosted form inline — there is no redirect to Stripe.
 // When ISLAND_DEEDS_TEST_MODE=1 the endpoint returns a synthetic local redirect
 // instead of calling Stripe (development only, never set on production).
 import Stripe from "stripe";
@@ -51,8 +54,26 @@ export default async function handler(req, res) {
   }
 
   try {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      // Embedded form (ui_mode "form") requires the dahlia API or later.
+      apiVersion: "2026-03-25.dahlia",
+    });
     const session = await stripe.checkout.sessions.create({
+      // ── Configured in Checkout Studio (fixed_by_ui, used as-is) ─────────
+      ui_mode: "form",
+      billing_address_collection: "auto",
+      phone_number_collection: { enabled: false },
+      automatic_tax: { enabled: false },
+      submit_type: "auto",
+      name_collection: { individual: { enabled: true, optional: true } },
+      saved_payment_method_options: { payment_method_save: "enabled" },
+      integration_identifier: "custom_embedded_web_0001",
+      // payment_method_collection intentionally omitted — only valid for
+      // mode "subscription". Islands are one-time purchases.
+      // ── Product content (sample_only, kept as real dynamic values) ──────
+      // line_items carries the deed data to fulfillment inside the product
+      // metadata — the Studio configuration retires the standalone "metadata"
+      // parameter, so fulfillment reads it back via listLineItems.
       mode: "payment",
       line_items: [
         {
@@ -65,20 +86,20 @@ export default async function handler(req, res) {
               description:
                 `Your name on a deed to a ${island.diameterMeters}m volcanic-coral island ` +
                 `(${Math.round(island.areaSqm)} m²) in the IREOLUWA Outer Shoals.`,
+              metadata: {
+                island_id: island.id,
+                island_name: resolved.name,
+                player_name: playerName,
+              },
             },
           },
         },
       ],
-      metadata: {
-        island_id: island.id,
-        island_name: resolved.name,
-        player_name: playerName,
-      },
-      success_url: `${origin}/?deed_session={CHECKOUT_SESSION_ID}#/islands`,
-      cancel_url: `${origin}/?deed_cancelled=1#/islands`,
     });
-    return sendJson(res, 200, { url: session.url });
+    // Embedded form: hand the client what it needs to mount the inline form.
+    return sendJson(res, 200, { client_secret: session.client_secret, session_id: session.id });
   } catch (err) {
+    console.error("checkout session failed:", err?.message || err);
     return sendJson(res, 502, { error: "Card payments are temporarily unavailable. Try again soon." });
   }
 }
